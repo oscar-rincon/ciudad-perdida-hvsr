@@ -1,0 +1,7 @@
+name: ciudad-perdida
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - folium
+  - ipykernel
