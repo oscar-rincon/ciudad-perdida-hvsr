@@ -1,5 +1,11 @@
 Ciudad Perdida/
 
+# Cached SRTM elevation tiles
+**/dem/*.hgt.gz
+
+# Cached basemap tiles
+**/tiles/*.jpg
+
 ### LaTeX ###
 ## Core latex/pdflatex auxiliary files:
 *.aux
