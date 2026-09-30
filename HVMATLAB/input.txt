@@ -1,0 +1,14 @@
+25             %Longueur(s)pour_le_LTA
+2              %Longueur(s)pour_le_STA
+0.2            %Seuil_minimal_pour_le_rapport_sta/lta
+2              %Seuil_minimal_pour_le_rapport_sta/lta
+32             %Longueur_de_fenetre_minimale_a_sélectionner
+0              %fenêtres_de_longueur_fixe_(0)_de_longueur_variable (1)
+40             %Si_longueurs_variables_longueur_maximale
+0              %C est_le_pourcentage_de_recouvrement_entre_deux_fenêtres_consécutives
+1              %type_de_lissage_FFT_avant_rapport_H/V_lissage_konno_ohmashi_(1)
+40             %parametre_b_lissage_konno
+1              %sélection_fenêtres_simultanément_sur_les_3_comp(0)sur_moyenne_quadratique_des_3_comp(1)
+0.5            %fréquence_coupure_capteur
+1              %taux_de_décimation_données_entrée
+30             %frequence maximale_en_Hz_pour fichier_sortie
