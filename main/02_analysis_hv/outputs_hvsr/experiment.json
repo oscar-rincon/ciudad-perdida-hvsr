@@ -1,0 +1,63 @@
+{
+  "created_utc": "2026-10-02T19:53:39.573429+00:00",
+  "source": "SAC",
+  "source_files": {
+    "E": "/home/orincon/ciudad-perdida-hvsr/HVMATLAB/00P2-2_WA.WAU40..HHE.D.2020.281.sac",
+    "N": "/home/orincon/ciudad-perdida-hvsr/HVMATLAB/00P2-2_WA.WAU40..HHN.D.2020.281.sac",
+    "Z": "/home/orincon/ciudad-perdida-hvsr/HVMATLAB/00P2-2_WA.WAU40..HHZ.D.2020.281.sac"
+  },
+  "random_seed": 20261002,
+  "parameters": {
+    "lta_s": 25.0,
+    "sta_s": 2.0,
+    "ratio_min": 0.2,
+    "ratio_max": 2.0,
+    "window_min_s": 32.0,
+    "window_max_s": 40.0,
+    "variable_windows": false,
+    "overlap_percent": 0.0,
+    "smoothing": "konno-ohmachi",
+    "ko_b": 40.0,
+    "trigger_mode": 1,
+    "sensor_low_hz": 0.5,
+    "decimation": 1,
+    "fmax_hz": 30.0
+  },
+  "taper_mode": "cosine",
+  "trigger_initialization": "standard",
+  "data_shape_samples_components": [
+    2816100,
+    3
+  ],
+  "dt_seconds": 0.01,
+  "sampling_rate_hz": 100.0,
+  "nyquist_hz": 50.0,
+  "number_of_windows": 842,
+  "n_fft": 4096,
+  "df_hz": 0.0244140625,
+  "f0_hz": 10.009765625,
+  "A0": 4.744216246110488,
+  "f0_geometric_mean_windows_hz": 8.888198128771494,
+  "f0_log_std_windows": 0.14497802297214768,
+  "f0_bootstrap_95pct_hz": [
+    8.695427828198804,
+    9.091945978749202
+  ],
+  "quality_diagnostics": {
+    "1: resolucion/ventana": true,
+    "2: duracion total": true,
+    "3: estabilidad 0.5-2 f0": true,
+    "4: caida lado bajo": true,
+    "5: caida lado alto": true,
+    "6: amplitud A0 > 2": true,
+    "7: picos envolvente dentro de +/-5%": false,
+    "8: dispersion literal (cuestionable)": true,
+    "9: variabilidad local": true
+  },
+  "versions": {
+    "python": "3.11.16",
+    "numpy": "2.4.6",
+    "matplotlib": "3.11.2",
+    "obspy": "1.5.1"
+  }
+}
