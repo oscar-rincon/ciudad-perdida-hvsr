@@ -108,7 +108,8 @@ class NativePlotTests(unittest.TestCase):
             meta={"duration_s": float(times[-1])})
         cls.result = hv.run_hvsr(cls.record, hv.HVSRParams(fmax=20), verbose=False)
         cls.quality = hv.assess_sesame_quality(cls.result)
-        cls.component_spectra = hv.component_fourier_spectra(cls.record, cls.result)
+        cls.fourier_data = hv.component_fourier_data(cls.record, cls.result)
+        cls.component_spectra = cls.fourier_data.smoothed
 
     def tearDown(self):
         plt.close("all")
@@ -142,6 +143,20 @@ class NativePlotTests(unittest.TestCase):
         self.assertEqual(linear.get_yscale(), "linear")
         with self.assertRaises(ValueError):
             hp.plot_hvsr(self.result, yscale="bad")
+
+    def test_sigma_bounds_are_dashed_blue_lines_above_window_curves(self):
+        ax = hp.plot_hvsr(self.result, window_cmap="rainbow")
+        bounds = [line for line in ax.lines
+                  if line.get_linestyle() == "--"
+                  and matplotlib.colors.to_hex(line.get_color()) == "#0072b2"]
+        self.assertEqual(len(bounds), 2)
+        for line, values in zip(bounds, self.result.bounds()):
+            np.testing.assert_array_equal(line.get_xdata(), self.result.frequency)
+            np.testing.assert_array_equal(line.get_ydata(), values)
+            self.assertGreater(line.get_zorder(), 1)
+        handles, labels = ax.get_legend_handles_labels()
+        self.assertEqual(labels.count(r"$\sigma$"), 1)
+        self.assertEqual(handles[labels.index(r"$\sigma$")].get_linestyle(), "--")
 
     def test_summary_panel_and_peak_markers(self):
         figure = hp.plot_hvsr_summary(self.result, self.quality)
@@ -223,7 +238,33 @@ class NativePlotTests(unittest.TestCase):
             np.testing.assert_allclose(accepted[key], original[key][result.valid_mask])
             self.assertEqual(accepted[key].shape, (result.n_windows, result.frequency.size))
 
-    def test_notebook_three_panel_layout_and_editable_controls(self):
+    def test_unsmoothed_fourier_data_matches_native_fft(self):
+        from hvsrpy.smoothing import SMOOTHING_OPERATORS
+
+        for padding in (False, True):
+            with self.subTest(padding=padding):
+                result = hv.run_hvsr(
+                    self.record, self.result.params.update(fft_zero_padding=padding), verbose=False)
+                result.hvsr.valid_window_boolean_mask[1] = False
+                data = hv.component_fourier_data(self.record, result)
+                starts = np.rint(result.window_starts_s[result.valid_mask] / 0.02).astype(int)
+                windows = hv._prepare_windows(
+                    self.record, result.params, starts, result.diagnostics["n_win"])
+                for window in windows:
+                    window.window("tukey", result.params.taper_pct_per_side / 50)
+                nfft = 2 * (len(data.raw_frequency) - 1)
+                np.testing.assert_array_equal(data.raw_frequency, np.fft.rfftfreq(nfft, 0.02))
+                for key, attr in (("N", "ns"), ("E", "ew"), ("Z", "vt")):
+                    expected = np.array([
+                        np.abs(np.fft.rfft(getattr(window, attr).amplitude, n=nfft)) * 0.02
+                        for window in windows])
+                    np.testing.assert_allclose(data.raw[key], expected, rtol=1e-12)
+                    smoothed = SMOOTHING_OPERATORS[result.params.smoothing](
+                        data.raw_frequency, expected, result.frequency,
+                        result.params.smoothing_bandwidth)
+                    np.testing.assert_allclose(data.smoothed[key], smoothed, rtol=1e-12)
+
+    def _notebook_figure_namespace(self):
         notebook = Path(__file__).resolve().parents[1] / "main/01_processing/hvsr_analysis.ipynb"
         cells = json.loads(notebook.read_text())["cells"]
         source = next("".join(cell["source"]) for cell in cells
@@ -237,32 +278,98 @@ class NativePlotTests(unittest.TestCase):
         namespace = {"hp": hp, "hv": hv, "plt": plt, "warnings": warnings}
         exec(compile(ast.Module(body=definitions, type_ignores=[]), str(notebook), "exec"),
              namespace)
+        return namespace
+
+    def test_fourier_visual_hierarchy_preserves_spectra(self):
+        namespace = self._notebook_figure_namespace()
         controls = namespace["FIGURE_CONTROLS"].copy()
-        controls.update(height_in=4, sta_lta_ylim=(0, 5), grid=False)
+        controls["show_unsmoothed_fourier"] = True
+        figure = namespace["make_analysis_figure"](
+            self.record, self.result, self.component_spectra, controls, hp.PAPER_STYLE,
+            fourier_data=self.fourier_data)
+        ax = figure.axes[1]
+        for raw, mean, key in zip(ax.lines[::2], ax.lines[1::2], ("Z", "N", "E")):
+            self.assertEqual(raw.get_alpha(), 0.12)
+            self.assertEqual(mean.get_linewidth(), controls["fourier_line_width"])
+            self.assertGreater(mean.get_linewidth(), raw.get_linewidth())
+            self.assertEqual(mean.get_linestyle(), controls["component_linestyles"][key])
+            np.testing.assert_allclose(
+                mean.get_ydata(), np.exp(np.log(self.component_spectra[key]).mean(axis=0)))
+        self.assertEqual(len({line.get_linestyle() for line in ax.lines[1::2]}), 3)
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        self.assertGreaterEqual(ax.get_legend().get_window_extent(renderer).y0, ax.bbox.y1)
+        self.assertTrue(any(line.get_visible() for line in ax.get_ygridlines()))
+        bounds = ax.get_tightbbox(renderer)
+        self.assertGreaterEqual(bounds.x0, 0)
+        self.assertLessEqual(bounds.x1, figure.bbox.width)
+        self.assertLessEqual(bounds.y1, figure.bbox.height)
+
+    def test_notebook_three_panel_layout_and_editable_controls(self):
+        namespace = self._notebook_figure_namespace()
+        controls = namespace["FIGURE_CONTROLS"].copy()
+        controls.update(height_in=4, sta_lta_ylim=(0, 5), grid=False,
+                        sta_lta_components=("Z", "N", "E"))
         controls["component_colors"] = {"Z": "#00AA00", "N": "#222222", "E": "#AA00AA"}
         style = hp.PaperStyle(width_in=5.5)
         figure = namespace["make_analysis_figure"](
-            self.record, self.result, self.component_spectra, controls, style)
+            self.record, self.result, self.component_spectra, controls, style,
+            fourier_data=self.fourier_data)
         self.assertEqual(len(figure.axes), 3)
         np.testing.assert_allclose(figure.get_size_inches(), [5.5, 4])
         sta_lta_ax, fourier_ax, hvsr_ax = figure.axes
-        self.assertEqual(sta_lta_ax.get_ylabel(), "Raw STA/LTA")
+        self.assertEqual(sta_lta_ax.get_ylabel(), "STA/LTA")
         self.assertEqual(sta_lta_ax.get_ylim(), (0, 5))
         self.assertEqual([line.get_label() for line in sta_lta_ax.lines],
                          ["Vertical", "North", "East"])
+        for line, attr in zip(sta_lta_ax.lines, ("vt", "ns", "ew")):
+            expected = hv.sta_lta_ratio(
+                getattr(self.record, attr).amplitude, self.record.vt.dt_in_seconds,
+                self.result.params.sta_s, self.result.params.lta_s,
+                self.result.params.sta_lta_amplitude)
+            np.testing.assert_array_equal(line.get_ydata(), expected)
+            np.testing.assert_array_equal(
+                line.get_xdata(),
+                np.arange(self.record.vt.n_samples) * self.record.vt.dt_in_seconds / 60)
         self.assertEqual(fourier_ax.lines[0].get_color(), "#00AA00")
-        for line, key in zip(fourier_ax.lines, ("Z", "N", "E")):
+        self.assertEqual(len(fourier_ax.lines), 6)
+        for line, key in zip(fourier_ax.lines[1::2], ("Z", "N", "E")):
             np.testing.assert_allclose(line.get_ydata(),
                                        np.exp(np.log(self.component_spectra[key]).mean(axis=0)))
+        visible = ((self.fourier_data.raw_frequency >= self.result.params.fmin)
+                   & (self.fourier_data.raw_frequency <= self.result.params.fmax))
+        for line, smoothed_line, key in zip(
+                fourier_ax.lines[::2], fourier_ax.lines[1::2], ("Z", "N", "E")):
+            np.testing.assert_array_equal(line.get_xdata(), self.fourier_data.raw_frequency[visible])
+            np.testing.assert_allclose(
+                line.get_ydata(), np.exp(np.log(self.fourier_data.raw[key][:, visible]).mean(axis=0)))
+            self.assertEqual(line.get_alpha(), controls["unsmoothed_fourier_alpha"])
+            self.assertEqual(line.get_color(), smoothed_line.get_color())
+            self.assertLess(line.get_zorder(), smoothed_line.get_zorder())
         self.assertEqual(fourier_ax.get_xscale(), "log")
         self.assertEqual(fourier_ax.get_yscale(), "log")
+        self.assertEqual([text.get_text() for text in fourier_ax.get_legend().get_texts()],
+                         ["Vertical", "North", "East"])
         self.assertEqual(hvsr_ax.get_yscale(), "linear")
         self.assertTrue(all(not ax.get_title(loc="left") for ax in figure.axes))
         figure.canvas.draw()
+        self.assertGreaterEqual(
+            sta_lta_ax.get_legend().get_window_extent(figure.canvas.get_renderer()).y0,
+            sta_lta_ax.get_window_extent().y1)
         self.assertGreater(sta_lta_ax.get_position().y0, fourier_ax.get_position().y1)
         self.assertGreater(sta_lta_ax.get_position().width, fourier_ax.get_position().width)
         self.assertAlmostEqual(fourier_ax.get_position().y0, hvsr_ax.get_position().y0)
         renderer = figure.canvas.get_renderer()
+        legend_bounds = hvsr_ax.get_legend().get_window_extent(renderer)
+        peak_bounds = hvsr_ax.title.get_window_extent(renderer)
+        self.assertGreaterEqual(legend_bounds.y0, hvsr_ax.bbox.y1)
+        self.assertGreaterEqual(
+            fourier_ax.get_legend().get_window_extent(renderer).y0, fourier_ax.bbox.y1)
+        self.assertGreaterEqual(peak_bounds.y0, legend_bounds.y1)
+        self.assertEqual(hvsr_ax.title.get_fontsize(), controls["hvsr_title_font_size"])
+        self.assertEqual(hvsr_ax.title.get_horizontalalignment(), "center")
+        self.assertAlmostEqual((peak_bounds.x0 + peak_bounds.x1) / 2,
+                               (hvsr_ax.bbox.x0 + hvsr_ax.bbox.x1) / 2)
         for ax in figure.axes:
             bounds = ax.get_tightbbox(renderer)
             self.assertGreaterEqual(bounds.x0, 0)
@@ -272,15 +379,83 @@ class NativePlotTests(unittest.TestCase):
         limited_params = self.result.params.update(
             anti_trigger=True, sta_lta_components=("N",), sta_lta_min=0, sta_lta_max=100)
         limited = hv.run_hvsr(self.record, limited_params, verbose=False)
-        limited_spectra = hv.component_fourier_spectra(self.record, limited)
+        limited_data = hv.component_fourier_data(self.record, limited)
+        limited_spectra = limited_data.smoothed
         limited_figure = namespace["make_analysis_figure"](
-            self.record, limited, limited_spectra, controls, style)
+            self.record, limited, limited_spectra, controls, style, fourier_data=limited_data)
         self.assertEqual(len(limited_figure.axes), 3)
         self.assertEqual([line.get_label() for line in limited_figure.axes[0].lines[:3]],
                          ["Vertical", "North", "East"])
         self.assertEqual([line.get_ydata()[0] for line in limited_figure.axes[0].lines[3:]],
                          [0, 100])
         self.assertEqual(set(limited.diagnostics["sta_lta"]), {"N"})
+        controls["sta_lta_components"] = ("E",)
+        east_figure = namespace["make_analysis_figure"](
+            self.record, limited, limited_spectra, controls, style, fourier_data=limited_data)
+        self.assertEqual(len(east_figure.axes[0].lines), 3)
+        self.assertEqual([line.get_label() for line in east_figure.axes[0].lines[:2]],
+                         ["East", "Acceptance limits"])
+        np.testing.assert_array_equal(
+            east_figure.axes[0].lines[0].get_ydata(),
+            hv.sta_lta_ratio(self.record.ew.amplitude, self.record.vt.dt_in_seconds,
+                             limited.params.sta_s, limited.params.lta_s,
+                             limited.params.sta_lta_amplitude))
+        self.assertEqual(len(east_figure.axes[1].lines), 6)
+        vector_params = limited_params.update(sta_lta_method="vector")
+        vector = hv.run_hvsr(self.record, vector_params, verbose=False)
+        vector_data = hv.component_fourier_data(self.record, vector)
+        vector_figure = namespace["make_analysis_figure"](
+            self.record, vector, vector_data.smoothed, controls, style, fourier_data=vector_data)
+        self.assertEqual(len(vector_figure.axes[0].lines), 3)
+        self.assertEqual(vector_figure.axes[0].lines[0].get_label(), "STA/LTA")
+        self.assertEqual(vector_figure.axes[0].lines[0].get_color(),
+                         controls["sta_lta_vector_color"])
+        self.assertEqual(vector_figure.axes[0].lines[0].get_alpha(), controls["sta_lta_alpha"])
+        self.assertEqual(vector_figure.axes[0].lines[0].get_linewidth(),
+                         controls["sta_lta_line_width"])
+        np.testing.assert_array_equal(
+            vector_figure.axes[0].lines[0].get_ydata(), vector.diagnostics["sta_lta"]["R"])
+        diagnostic_figure = hp.plot_window_selection(self.record, vector)
+        self.assertEqual(len(diagnostic_figure.axes), 4)
+        self.assertIn("Vector magnitude", diagnostic_figure.axes[-1].get_legend_handles_labels()[1])
+        np.testing.assert_array_equal(
+            limited_figure.axes[0].lines[1].get_ydata(), limited.diagnostics["sta_lta"]["N"])
+        with self.assertRaisesRegex(ValueError, "Rerun the processing cell"):
+            namespace["make_analysis_figure"](
+                self.record, self.result, self.component_spectra, controls, style)
+        controls["show_unsmoothed_fourier"] = False
+        hidden = namespace["make_analysis_figure"](
+            self.record, self.result, self.component_spectra, controls, style)
+        self.assertEqual(len(hidden.axes[1].lines), 3)
+        controls["hvsr_window_alpha"] = 0.06
+        window_figure = namespace["make_analysis_figure"](
+            self.record, self.result, self.component_spectra, controls, style, show_windows=True)
+        window_ax = window_figure.axes[2]
+        window_lines = [line for line in window_ax.lines if line.get_zorder() == 1]
+        self.assertEqual(len(window_lines), self.result.n_windows)
+        starts = self.result.window_starts_s[self.result.valid_mask]
+        ranks = np.argsort(np.argsort(starts))
+        expected_colors = plt.get_cmap(controls["window_cmap"])(ranks / max(len(starts) - 1, 1))
+        shading_colors = window_figure.axes[0].collections[0].get_facecolors()
+        np.testing.assert_allclose(shading_colors[:, :3], expected_colors[:, :3])
+        for line, curve, color in zip(window_lines, self.result.window_curves, expected_colors):
+            np.testing.assert_array_equal(line.get_ydata(), curve)
+            np.testing.assert_array_equal(line.get_color(), color)
+            self.assertEqual(line.get_alpha(), 0.06)
+            self.assertTrue(line.get_rasterized())
+        self.assertEqual(window_ax.get_yscale(), "log")
+        self.assertEqual([text.get_text() for text in window_ax.get_legend().get_texts()],
+                         [r"$\sigma$", "Mean", "Individual windows"])
+        window_figure.canvas.draw()
+        window_renderer = window_figure.canvas.get_renderer()
+        self.assertGreaterEqual(
+            window_ax.title.get_window_extent(window_renderer).y0,
+            window_ax.get_legend().get_window_extent(window_renderer).y1)
+        window_legend = window_ax.get_legend().get_window_extent(window_renderer)
+        self.assertGreaterEqual(window_legend.y0, window_ax.bbox.y1)
+        for alpha in (-0.1, 1.1, np.nan):
+            with self.subTest(alpha=alpha), self.assertRaisesRegex(ValueError, "window_alpha"):
+                hp.plot_hvsr(self.result, window_alpha=alpha)
 
 
 if __name__ == "__main__":

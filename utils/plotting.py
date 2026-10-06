@@ -174,23 +174,39 @@ def _frequency_axes(ax: Axes, result: HVSRResult, style: PaperStyle) -> None:
 
 def plot_hvsr(result: HVSRResult, show_windows: bool = True, title: str = "HVSR",
               *, ax: Axes | None = None, yscale: str | None = None,
+              window_alpha: float = 0.12,
+              window_cmap: str | None = None,
               style: PaperStyle = PAPER_STYLE) -> Axes:
     """Mean/scatter; full-window views default to log H/V without clipping data."""
     yscale = ("log" if show_windows else "linear") if yscale is None else yscale
     if yscale not in ("linear", "log"):
         raise ValueError("yscale must be 'linear', 'log' or None.")
+    if not np.isfinite(window_alpha) or not 0 <= window_alpha <= 1:
+        raise ValueError("window_alpha must be finite and between 0 and 1.")
+    cmap = mpl.colormaps[window_cmap] if window_cmap is not None else None
     with paper_context(style):
         if ax is None:
             _, axes = paper_subplots(height_in=3.0, style=style)
             ax = axes[0, 0]
         frequency = result.frequency
         if show_windows:
-            ax.plot(frequency, result.window_curves.T, color="0.7", alpha=0.12, lw=0.3,
-                    rasterized=True, zorder=1)
+            window_lines = ax.plot(
+                frequency, result.window_curves.T, color="0.7", alpha=window_alpha, lw=0.3,
+                rasterized=True, zorder=1)
+            window_lines[0].set_label("Individual windows")
+            if cmap is not None:
+                starts = result.window_starts_s[result.valid_mask]
+                ranks = np.argsort(np.argsort(starts))
+                colors = cmap(ranks / max(len(starts) - 1, 1))
+                for line, color in zip(window_lines, colors):
+                    line.set_color(color)
         lower, upper = result.bounds()
         color = style.colors[0]
         ax.fill_between(frequency, lower, upper, color=color, alpha=0.22,
-                        label=r"$\pm 1\sigma_{\ln A}$", zorder=2)
+                        zorder=2)
+        ax.plot(frequency, lower, color="#0072B2", ls="--", lw=1.0,
+                label=r"$\sigma$", zorder=3)
+        ax.plot(frequency, upper, color="#0072B2", ls="--", lw=1.0, zorder=3)
         ax.plot(frequency, result.mean_curve, color=color, lw=1.5,
                 label=f"Mean", zorder=3)
         f0, a0 = result.peak
@@ -228,13 +244,13 @@ def plot_window_selection(record: hvsrpy.SeismicRecording3C, result: HVSRResult,
                           component: str = "all", *, style: PaperStyle = PAPER_STYLE) -> Figure:
     """Plot three waveform components, accepted windows and optional STA/LTA diagnostics."""
     components = {"N": "ns", "E": "ew", "Z": "vt"}
-    labels = {"Z": "Vertical", "N": "North", "E": "East"}
+    labels = {"Z": "Vertical", "N": "North", "E": "East", "R": "Vector magnitude"}
     if component != "all" and component not in components:
         raise ValueError("component must be 'all', N, E or Z.")
     selected = ("Z", "N", "E") if component == "all" else (component,)
     dt = record.vt.dt_in_seconds
     ratios = result.diagnostics["sta_lta"]
-    ratios = {key: value for key, value in ratios.items() if key in selected}
+    ratios = {key: value for key, value in ratios.items() if key in selected or key == "R"}
     starts = np.sort(result.window_starts_s[result.valid_mask])
     windows = [(float(start), float(start + result.params.window_length_s)) for start in starts]
     duration_min = (record.vt.n_samples - 1) * dt / 60

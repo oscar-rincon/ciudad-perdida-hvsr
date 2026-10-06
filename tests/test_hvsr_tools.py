@@ -44,7 +44,8 @@ class ParameterTests(unittest.TestCase):
                         {"filter_corners_hz": (10, 5)}, {"sta_lta_components": ("Q",)},
                         {"window_selection": "unknown"}, {"smoothing_bandwidth": -1},
                         {"transient_padding_s": -1}, {"transient_padding_s": np.inf},
-                        {"max_crest_factor": 1}, {"max_crest_factor": np.nan}):
+                        {"max_crest_factor": 1}, {"max_crest_factor": np.nan},
+                        {"sta_lta_method": "unknown"}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 hv.HVSRParams().update(**changes).validate()
 
@@ -64,6 +65,42 @@ class ParameterTests(unittest.TestCase):
         starts, diagnostics = hv.select_windows(record, params)
         self.assertGreater(starts[0] * 0.02, params.lta_s - 0.1)
         self.assertLess(diagnostics["valid_fraction"], 1)
+
+    def test_vector_sta_lta_matches_moving_means_and_selection(self):
+        record = synthetic_record()
+        centered = [getattr(record, attr).amplitude - getattr(record, attr).amplitude.mean()
+                    for attr in ("ns", "ew", "vt")]
+        magnitude = np.sqrt(sum(values ** 2 for values in centered))
+        for mode in ("abs", "square"):
+            with self.subTest(mode=mode):
+                params = hv.HVSRParams(
+                    fmax=20, anti_trigger=True, sta_lta_method="vector",
+                    sta_s=2, lta_s=25, sta_lta_amplitude=mode)
+                values = magnitude if mode == "abs" else magnitude ** 2
+                expected = np.full(values.size, np.nan)
+                sta, lta = 100, 1250
+                sta_mean = np.convolve(values, np.ones(sta) / sta, mode="valid")
+                lta_mean = np.convolve(values, np.ones(lta) / lta, mode="valid")
+                expected[lta - 1:] = sta_mean[lta - sta:] / lta_mean
+                actual = hv.vector_sta_lta_ratio(record, 2, 25, mode)
+                np.testing.assert_allclose(actual, expected, rtol=1e-11)
+                starts, diagnostics = hv.select_windows(record, params)
+                self.assertEqual(set(diagnostics["sta_lta"]), {"R"})
+                np.testing.assert_array_equal(diagnostics["sta_lta"]["R"], actual)
+                valid = (actual >= params.sta_lta_min) & (actual <= params.sta_lta_max)
+                for start in starts:
+                    self.assertTrue(valid[start:start + diagnostics["n_win"]].all())
+                np.testing.assert_allclose(diagnostics["valid_fraction"], valid.mean())
+        shifted = hvsrpy.SeismicRecording3C(
+            *(hvsrpy.TimeSeries(getattr(record, attr).amplitude + offset, .02)
+              for attr, offset in zip(("ns", "ew", "vt"), (100, -20, 5))))
+        np.testing.assert_allclose(hv.vector_sta_lta_ratio(shifted, 2, 25),
+                                   hv.vector_sta_lta_ratio(record, 2, 25), rtol=1e-11)
+        zero = hvsrpy.SeismicRecording3C(
+            *(hvsrpy.TimeSeries(np.zeros(12800), .02) for _ in range(3)))
+        starts, _ = hv.select_windows(
+            zero, hv.HVSRParams(anti_trigger=True, sta_lta_method="vector"))
+        self.assertEqual(starts.size, 0)
 
     def test_transient_buffer_excludes_both_sides_without_wraparound(self):
         samples = np.sin(np.arange(100) * 0.3)
@@ -238,6 +275,29 @@ class StationRegressionTests(unittest.TestCase):
         self.assertEqual(self.result.n_windows, 880)
         np.testing.assert_allclose(self.result.peak, [10.128677576806975, 5.181506474064968], rtol=1e-12)
         self.assertAlmostEqual(self.result.summary()["f0_windows_std_hz"], 3.642077573446046)
+
+    def test_vector_sta_lta_profile_uses_one_combined_selection_ratio(self):
+        params = hv.HVSRParams(
+            window_length_s=100, window_selection="continuous", anti_trigger=True,
+            sta_lta_method="vector", lta_s=30, transient_padding_s=2, max_crest_factor=6)
+        result = hv.run_hvsr(self.record, params, verbose=False)
+        self.assertEqual(set(result.diagnostics["sta_lta"]), {"R"})
+        self.assertEqual(len(result.diagnostics["candidate_starts"]), 259)
+        self.assertEqual(result.diagnostics["n_crest_rejected"], 67)
+        self.assertEqual(result.n_windows, 192)
+        np.testing.assert_allclose(result.peak, [10.060251514056517, 5.11689314726417], rtol=1e-12)
+        ratio = result.diagnostics["sta_lta"]["R"]
+        starts = np.rint(result.window_starts_s / self.record.vt.dt_in_seconds).astype(int)
+        for start in starts:
+            segment = ratio[start - 200:start + result.diagnostics["n_win"] + 200]
+            self.assertTrue(np.all((segment >= .2) & (segment <= 2)))
+        quality = hv.assess_sesame_quality(result, time_blocks=None)
+        self.assertEqual(quality["metrics"]["reliability_count"], 3)
+        self.assertEqual(quality["metrics"]["clarity_count"], 4)
+        self.assertFalse(quality["metrics"]["sesame_passed"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = json.loads(hv.save_outputs(result, tmp)["summary"].read_text())
+            self.assertEqual(summary["params"]["sta_lta_method"], "vector")
 
     def test_quality_reports_competing_peak_without_hiding_failure(self):
         quality = hv.assess_sesame_quality(self.result)

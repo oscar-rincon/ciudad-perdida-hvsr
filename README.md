@@ -126,19 +126,19 @@ parameter ranking, or minimum-retention rule.
 Reliability requires 3/3 and clarity requires at least 5/6; these are diagnostics,
 not proof of a unique physical resonance.
 
-The notebook's quiet-window starting profile for 00P2-2 uses 32-second
-nonoverlapping windows, continuous positioning, absolute-amplitude STA/LTA
-(2-second STA, 30-second LTA, bounds 0.2--2.0 on N/E/Z), a 2-second transient
+The notebook's current quiet-window profile for 00P2-2 uses 100-second
+nonoverlapping windows, continuous positioning, vector-amplitude STA/LTA
+(2-second STA, 30-second LTA, bounds 0.2--2.0), a 2-second transient
 buffer and a maximum crest factor of 6. Processing uses mean removal, a
 5%-per-side taper, native bandwidth 40 and a 0.2--45 Hz grid:
 
-- **632 quiet-interval candidates**, with **61 rejected by the crest guard**,
-  leaving **571 accepted windows** (64.9% of the 880-window unfiltered grid).
-- Mean-curve peak **10.06025 Hz**, amplitude **5.31017**.
+- **259 quiet-interval candidates**, with **67 rejected by the crest guard**,
+  leaving **192 accepted windows** (68.3% of the 281-window unfiltered grid).
+- Mean-curve peak **10.06025 Hz**, amplitude **5.11689**.
 - Reliability **3/3**, clarity **4/6**: **C4 and C5 fail**. This profile does
   not pass the overall clarity requirement.
-- Window-peak standard deviation is approximately **3.257 Hz**. Amplitude
-  scatter at the mean peak is approximately **1.146**.
+- Window-peak standard deviation is approximately **2.151 Hz**. Amplitude
+  scatter at the mean peak is approximately **1.097**.
 - Multiple peaks remain; quiet-window selection does not establish a unique
   resonance or temporal stability.
 
@@ -186,13 +186,52 @@ Controls are recorded in the JSON provenance.
 
 Component Fourier spectra are computed in the processing cell using the same
 accepted windows, orientation, filter, detrend, taper, FFT settings and native
-smoothing as HVSR. The figure shows their lognormal mean. Amplitudes use
+smoothing as HVSR. The figure overlays the lognormal-mean unsmoothed amplitudes
+on their original FFT bins behind the smoothed means in matching component
+colors. Set `show_unsmoothed_fourier=False` to hide these traces, or edit
+`unsmoothed_fourier_alpha` (default 0.25) and `unsmoothed_fourier_line_width`
+(default 0.4) in `FIGURE_CONTROLS`. Unsmoothed means exclude DC and are restricted
+to the displayed frequency band; zero amplitudes yield a zero geometric mean.
+`component_fourier_data` returns raw frequencies, raw amplitudes and smoothed
+amplitudes without repeating window preparation or FFTs. The notebook's Fourier
+panel uses faint raw traces (alpha 0.12, width 0.3) behind thicker smoothed means
+(`fourier_line_width=1.2`). Solid/dashed/dash-dot component styles and subtle
+major grid lines (`fourier_grid=True`) improve separation without changing
+spectral values. Log-amplitude minor ticks are limited to 2 and 5 per decade.
+Amplitudes use
 `abs(FFT) * dt` in input units times seconds, not PSD or response-corrected
-units. STA/LTA uses min/max envelopes to preserve transients rather than stride
-sampling. If anti-trigger is disabled or a component is not used for selection,
-its STA/LTA is calculated for display only; window acceptance is unchanged.
+units. The notebook selects windows using `sta_lta_method='vector'`:
+`R(t) = sqrt((N-mean(N))**2 + (E-mean(E))**2 + (Z-mean(Z))**2)`.
+Trailing short/long means are taken directly on this nonnegative magnitude
+(`sta_lta_amplitude='abs'`), or its square (`'square'`); the magnitude itself
+is not mean-subtracted. Undefined/zero-energy ratios fail selection.
+The top panel plots this exact selection ratio in
+`FIGURE_CONTROLS['sta_lta_vector_color']`, without
+binning, averaging or waveform envelopes. Undefined startup values remain gaps.
+For backward compatibility, `HVSRParams` defaults to `sta_lta_method='components'`,
+which tests separate ratios for every configured `sta_lta_components` member.
+In that mode, `FIGURE_CONTROLS['sta_lta_components']` selects displayed traces only.
+In vector mode, all N/E/Z contribute regardless of that component setting.
+When anti-trigger is disabled, the ratio is calculated for display only.
 Acceptance-limit lines appear only when anti-trigger is enabled.
-Set `SHOW_WINDOW_CURVES=True` to include every accepted H/V curve.
+`SHOW_WINDOW_CURVES=True` (the notebook default) includes every accepted H/V
+curve behind the mean/scatter with opacity controlled by
+`FIGURE_CONTROLS['hvsr_window_alpha']` (default 0.08). Set it to `False` to hide
+the window curves. Unsmoothed Fourier curves remain visible but have no separate
+legend entry; the Fourier legend lists only Vertical, North and East.
+Accepted-window shading and individual H/V curves use matching chronological
+rainbow colors, controlled by `FIGURE_CONTROLS['window_cmap']` (default `rainbow`).
+Their opacity is independently controlled by `accepted_alpha` and
+`hvsr_window_alpha`. Component spectra retain the blue/gray palette.
+All three legends sit above their axes, outside the data areas.
+Both lognormal sigma bounds are drawn as dashed blue lines above the individual
+window curves, in addition to the translucent scatter band. The sigma legend
+entry uses the same dashed-line style.
+Peak values form a centered title above the H/V legend,
+with size controlled by `hvsr_title_font_size` (default 6 points).
+The individual-window entry appears only when those curves are shown.
+Adjust `sta_lta_alpha`
+(1.0 is fully opaque) and `sta_lta_line_width` independently of Fourier curves.
 Full-window HVSR diagnostics default to a logarithmic H/V axis so extreme ratios
 do not flatten the mean; no windows are clipped or removed for display. Mean-only
 and paper-summary plots use a linear H/V axis. Override with `yscale="linear"` or

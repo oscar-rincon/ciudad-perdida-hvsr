@@ -27,6 +27,8 @@ __all__ = [
     "HVSRParams", "HVSRResult", "load_record", "sta_lta_ratio", "select_windows",
     "run_hvsr", "assess_sesame_quality", "parameter_sweep", "plot_hvsr",
     "plot_window_selection", "plot_time_blocks", "save_outputs", "component_fourier_spectra",
+    "ComponentFourierData", "component_fourier_data",
+    "vector_sta_lta_ratio",
 ]
 
 _COMPONENTS = {"N": "ns", "E": "ew", "Z": "vt"}
@@ -47,6 +49,7 @@ class HVSRParams:
     sta_lta_max: float = 2.0
     sta_lta_components: tuple[str, ...] = ("N", "E", "Z")
     sta_lta_amplitude: str = "abs"
+    sta_lta_method: str = "components"
     transient_padding_s: float = 0.0
     max_crest_factor: float | None = None
     clip_threshold_pct: float | None = None
@@ -96,6 +99,8 @@ class HVSRParams:
             (bool(self.sta_lta_components) and set(self.sta_lta_components) <= set(_COMPONENTS),
              "sta_lta_components must contain N, E and/or Z."),
             (self.sta_lta_amplitude in ("abs", "square"), "sta_lta_amplitude must be 'abs' or 'square'."),
+            (self.sta_lta_method in ("components", "vector"),
+             "sta_lta_method must be 'components' or 'vector'."),
             (np.isfinite(self.transient_padding_s) and self.transient_padding_s >= 0,
              "transient_padding_s must be nonnegative and finite."),
             (self.max_crest_factor is None or (np.isfinite(self.max_crest_factor) and self.max_crest_factor > 1),
@@ -228,14 +233,30 @@ def _trailing_mean(values: np.ndarray, length: int) -> np.ndarray:
 def sta_lta_ratio(amplitude: np.ndarray, dt: float, sta_s: float, lta_s: float,
                   mode: str = "abs") -> np.ndarray:
     """Continuous trailing STA/LTA; undefined startup samples are NaN."""
-    if not 0 < sta_s < lta_s or dt <= 0 or mode not in ("abs", "square"):
-        raise ValueError("Invalid STA/LTA times, sampling interval or amplitude mode.")
     values = amplitude - np.mean(amplitude)
     values = np.abs(values) if mode == "abs" else values ** 2
+    return _sta_lta_from_values(values, dt, sta_s, lta_s, mode)
+
+
+def _sta_lta_from_values(values: np.ndarray, dt: float, sta_s: float, lta_s: float,
+                         mode: str) -> np.ndarray:
+    if not 0 < sta_s < lta_s or dt <= 0 or mode not in ("abs", "square"):
+        raise ValueError("Invalid STA/LTA times, sampling interval or amplitude mode.")
     sta = max(1, int(round(sta_s / dt)))
     lta = max(sta + 1, int(round(lta_s / dt)))
     with np.errstate(divide="ignore", invalid="ignore"):
         return _trailing_mean(values, sta) / _trailing_mean(values, lta)
+
+
+def vector_sta_lta_ratio(record: hvsrpy.SeismicRecording3C, sta_s: float, lta_s: float,
+                         mode: str = "abs") -> np.ndarray:
+    """STA/LTA of the mean-centered N/E/Z vector magnitude, or its square."""
+    energy = np.zeros(record.vt.n_samples)
+    for attribute in _COMPONENTS.values():
+        amplitude = getattr(record, attribute).amplitude
+        energy += (amplitude - amplitude.mean()) ** 2
+    values = np.sqrt(energy) if mode == "abs" else energy
+    return _sta_lta_from_values(values, record.vt.dt_in_seconds, sta_s, lta_s, mode)
 
 
 def select_windows(record: hvsrpy.SeismicRecording3C, params: HVSRParams) -> tuple[np.ndarray, dict]:
@@ -249,10 +270,14 @@ def select_windows(record: hvsrpy.SeismicRecording3C, params: HVSRParams) -> tup
     valid = np.ones(record.vt.n_samples, dtype=bool)
     ratios = {}
     if params.anti_trigger:
-        for comp in params.sta_lta_components:
-            ratio = sta_lta_ratio(getattr(record, _COMPONENTS[comp]).amplitude, dt,
-                                  params.sta_s, params.lta_s, params.sta_lta_amplitude)
-            ratios[comp] = ratio
+        if params.sta_lta_method == "vector":
+            ratios["R"] = vector_sta_lta_ratio(
+                record, params.sta_s, params.lta_s, params.sta_lta_amplitude)
+        else:
+            for comp in params.sta_lta_components:
+                ratios[comp] = sta_lta_ratio(getattr(record, _COMPONENTS[comp]).amplitude, dt,
+                                            params.sta_s, params.lta_s, params.sta_lta_amplitude)
+        for ratio in ratios.values():
             valid &= (ratio >= params.sta_lta_min) & (ratio <= params.sta_lta_max)
     if params.clip_threshold_pct is not None:
         for attr in _COMPONENTS.values():
@@ -413,9 +438,18 @@ def _processing_settings(params: HVSRParams) -> hvsrpy.HvsrTraditionalProcessing
     return settings
 
 
-def component_fourier_spectra(record: hvsrpy.SeismicRecording3C,
-                             result: HVSRResult) -> dict[str, np.ndarray]:
-    """Accepted-window N/E/Z Fourier amplitudes (input units * s) on the HVSR grid."""
+@dataclass
+class ComponentFourierData:
+    """Accepted-window amplitudes before and after native smoothing."""
+
+    raw_frequency: np.ndarray
+    raw: dict[str, np.ndarray]
+    smoothed: dict[str, np.ndarray]
+
+
+def component_fourier_data(record: hvsrpy.SeismicRecording3C,
+                           result: HVSRResult) -> ComponentFourierData:
+    """N/E/Z abs(FFT) * dt on native FFT bins and the smoothed HVSR grid."""
     starts = np.rint(result.window_starts_s[result.valid_mask] / record.vt.dt_in_seconds).astype(int)
     if not starts.size:
         raise ValueError("Component spectra require at least one accepted window.")
@@ -428,17 +462,27 @@ def component_fourier_spectra(record: hvsrpy.SeismicRecording3C,
     dt = record.vt.dt_in_seconds
     fft_frequency = np.fft.rfftfreq(settings.fft_settings["n"], dt)
     spectra = {}
+    raw_spectra = {}
     for window in windows:
         window.window(*settings.window_type_and_width)
     for component, attribute in _COMPONENTS.items():
         raw = np.array([np.abs(rfft(getattr(window, attribute).amplitude,
                                     **settings.fft_settings)) * dt for window in windows])
+        if not np.isfinite(raw).all():
+            raise ValueError(f"{component} raw Fourier spectra contain nonfinite amplitudes.")
+        raw_spectra[component] = raw
         smoothed = SMOOTHING_OPERATORS[result.params.smoothing](
             fft_frequency, raw, result.frequency, result.params.smoothing_bandwidth)
         if not np.isfinite(smoothed).all() or np.any(smoothed <= 0):
             raise ValueError(f"{component} Fourier spectra contain nonpositive or nonfinite amplitudes.")
         spectra[component] = smoothed
-    return spectra
+    return ComponentFourierData(fft_frequency, raw_spectra, spectra)
+
+
+def component_fourier_spectra(record: hvsrpy.SeismicRecording3C,
+                             result: HVSRResult) -> dict[str, np.ndarray]:
+    """Accepted-window N/E/Z Fourier amplitudes (input units * s) on the HVSR grid."""
+    return component_fourier_data(record, result).smoothed
 
 
 def run_hvsr(record: hvsrpy.SeismicRecording3C, params: HVSRParams, verbose: bool = True) -> HVSRResult:
