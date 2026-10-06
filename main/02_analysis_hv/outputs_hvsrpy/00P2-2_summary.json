@@ -1,0 +1,91 @@
+{
+  "record": {
+    "file name(s)": [
+      "/home/orincon/ciudad-perdida-hvsr/HVMATLAB/00P2-2_WA.WAU40..HHN.D.2020.281.sac",
+      "/home/orincon/ciudad-perdida-hvsr/HVMATLAB/00P2-2_WA.WAU40..HHE.D.2020.281.sac",
+      "/home/orincon/ciudad-perdida-hvsr/HVMATLAB/00P2-2_WA.WAU40..HHZ.D.2020.281.sac"
+    ],
+    "deployed degrees from north": 0.0,
+    "current degrees from north": 0.0,
+    "station": "00P2-2",
+    "starttime": "2020-10-07T08:18:39.000000Z",
+    "sampling_rate_hz": 100.0,
+    "duration_s": 28160.99
+  },
+  "params": {
+    "window_length_s": 32.0,
+    "overlap_pct": 0.0,
+    "window_selection": "continuous",
+    "anti_trigger": true,
+    "sta_lta_mode": "continuous",
+    "sta_s": 2.0,
+    "lta_s": 25.0,
+    "sta_lta_min": 0.2,
+    "sta_lta_max": 2.0,
+    "sta_lta_components": [
+      "N",
+      "E",
+      "Z"
+    ],
+    "sta_lta_amplitude": "abs",
+    "sta_lta_on_filtered": false,
+    "clip_threshold_pct": 99.0,
+    "filter_corners_hz": [
+      null,
+      null
+    ],
+    "filter_order": 5,
+    "detrend": "linear",
+    "orient_to_degrees_from_north": null,
+    "taper": true,
+    "taper_pct": 2.0,
+    "taper_pct_per_side": true,
+    "fft_zero_padding": true,
+    "smoothing": "konno_and_ohmachi",
+    "smoothing_bandwidth": 40.0,
+    "smoothing_scale": "linear",
+    "horizontal_combination": "squared_average",
+    "fmin": 0.5,
+    "fmax": 30.0,
+    "frequency_spacing": "log",
+    "n_frequencies": 1000,
+    "peak_range_hz": null,
+    "peak_method": "max",
+    "distribution": "lognormal",
+    "frequency_domain_rejection": false,
+    "fdr_n": 2.0,
+    "fdr_max_iterations": 50
+  },
+  "summary": {
+    "n_grid_windows": 880,
+    "n_windows_time_selection": 675,
+    "n_windows": 675,
+    "valid_fraction": 0.9712,
+    "f0_mean_curve_hz": 10.084620517318521,
+    "A0_mean_curve": 5.220202274074627,
+    "f0_windows_hz": 9.441039365514952,
+    "f0_windows_std": 0.27668872544451284,
+    "f0_windows_low_hz": 7.159050431876009,
+    "f0_windows_high_hz": 12.450425534695647,
+    "A0_windows": 5.951780029723983,
+    "fdr_iterations": null,
+    "runtime_s": 2.28
+  },
+  "sesame": {
+    "reliability": [
+      1,
+      1,
+      1
+    ],
+    "reliability_passed": true,
+    "clarity": [
+      1,
+      1,
+      1,
+      0,
+      0,
+      1
+    ],
+    "clarity_passed": false
+  }
+}
