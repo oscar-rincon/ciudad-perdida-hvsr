@@ -1,5 +1,5 @@
 {
-  "created_utc": "2026-10-02T19:53:39.573429+00:00",
+  "created_utc": "2026-10-05T20:52:30.729119+00:00",
   "source": "SAC",
   "source_files": {
     "E": "/home/orincon/ciudad-perdida-hvsr/HVMATLAB/00P2-2_WA.WAU40..HHE.D.2020.281.sac",
@@ -40,8 +40,8 @@
   "f0_geometric_mean_windows_hz": 8.888198128771494,
   "f0_log_std_windows": 0.14497802297214768,
   "f0_bootstrap_95pct_hz": [
-    8.695427828198804,
-    9.091945978749202
+    8.685754671669208,
+    9.098000913147159
   ],
   "quality_diagnostics": {
     "1: resolucion/ventana": true,

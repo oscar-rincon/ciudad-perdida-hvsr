@@ -1,0 +1,51 @@
+{
+  "package_version": "2.1.0",
+  "input_sac_files": [
+    "/home/orincon/ciudad-perdida-hvsr/HVMATLAB/00P2-2_WA.WAU40..HHE.D.2020.281.sac",
+    "/home/orincon/ciudad-perdida-hvsr/HVMATLAB/00P2-2_WA.WAU40..HHN.D.2020.281.sac",
+    "/home/orincon/ciudad-perdida-hvsr/HVMATLAB/00P2-2_WA.WAU40..HHZ.D.2020.281.sac"
+  ],
+  "sampling_rate_hz": 100.0,
+  "dt_seconds": 0.01,
+  "window_length_seconds": 32.0,
+  "number_windows_before_rejection": 880,
+  "number_windows_after_sta_lta": 679,
+  "number_windows_after_frequency_rejection": 840,
+  "frequency_rejection_iterations": 5,
+  "STA_seconds": 2.0,
+  "LTA_seconds": 25.0,
+  "STA_LTA_min": 0.2,
+  "STA_LTA_max": 2.0,
+  "smoothing_operator": "konno_and_ohmachi",
+  "smoothing_bandwidth": 40,
+  "horizontal_method": "squared_average",
+  "f0_peak_mean_curve_sta_lta_hz": 10.0896365139296,
+  "A0_peak_mean_curve_sta_lta": 5.239032430664514,
+  "fn_mean_of_window_peaks_sta_lta_hz": 9.413849355162679,
+  "f0_peak_mean_curve_frequency_rejection_hz": 10.0896365139296,
+  "A0_peak_mean_curve_frequency_rejection": 5.237726229463852,
+  "reference_curve_comparison": {
+    "median_log10_hvsrpy_over_reference": 0.017600025074540997,
+    "median_absolute_log10_ratio": 0.01909780074906836,
+    "reference_f0_hz": 10.009765625
+  },
+  "sesame_reliability": [
+    1,
+    1,
+    1
+  ],
+  "sesame_reliability_passed": true,
+  "sesame_clarity": [
+    1,
+    1,
+    1,
+    0,
+    0,
+    1
+  ],
+  "sesame_clarity_passed": false,
+  "taper": {
+    "type": "tukey",
+    "total_width_fraction": 0.04
+  }
+}

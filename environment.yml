@@ -8,3 +8,6 @@ dependencies:
   - matplotlib
   - ipykernel
   - obspy
+  - pip
+  - pip:
+      - hvsrpy==2.1.0

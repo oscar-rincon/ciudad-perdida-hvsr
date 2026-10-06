@@ -1,0 +1,35 @@
+{
+  "input_mseed": "/home/orincon/ciudad-perdida-hvsr/main/02_analysis_hv/outputs_geopsy/HV01_triplet.mseed",
+  "channels": {
+    "vertical": "HHZ",
+    "north": "HHN",
+    "east": "HHE"
+  },
+  "sampling_rate_hz": 100.0,
+  "dt_seconds": 0.01,
+  "params_to_enter_in_geopsy_gui": {
+    "window_s": 32.0,
+    "overlap_percent": 0.0,
+    "anti_trigger": true,
+    "raw_sta_s": 2.0,
+    "raw_lta_s": 25.0,
+    "raw_ratio_min": 0.2,
+    "raw_ratio_max": 2.0,
+    "bad_sample_threshold_percent": 99.0,
+    "smoothing": "konno & ohmachi",
+    "smoothing_constant": 40.0,
+    "cosine_taper": true,
+    "taper_width_percent": 2.0,
+    "horizontal_method": "squared average",
+    "fmin_hz": 0.5,
+    "fmax_hz": 30.0,
+    "frequency_sampling": "log",
+    "number_frequency_samples": 1000
+  },
+  "important_differences_from_matlab": [
+    "Geopsy combina N/E antes del suavizado; MATLAB suaviza cada horizontal antes de combinarlas.",
+    "Geopsy aplica taper cosenoidal estandar; MATLAB usa una implementacion de borde distinta.",
+    "La seleccion de ventanas anti-trigger no garantiza los mismos indices que el trigger MATLAB.",
+    "Geopsy muestrea la curva sobre su malla elegida; comparar tras interpolar en frecuencia."
+  ]
+}
