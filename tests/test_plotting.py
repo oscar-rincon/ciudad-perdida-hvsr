@@ -1,6 +1,7 @@
 """Publication dimensions, isolated styling and scientific plot contracts."""
 
 import ast
+from dataclasses import replace
 import json
 import re
 import struct
@@ -132,6 +133,58 @@ class NativePlotTests(unittest.TestCase):
         hp.plot_time_blocks(self.result, self.quality)
         np.testing.assert_array_equal(self.result.hvsr.amplitude, curves)
         np.testing.assert_array_equal(self.record.vt.amplitude, raw)
+
+    def test_crest_factor_diagnostic_shows_candidates_and_threshold(self):
+        factors = np.array([5.0, 6.0, 7.0, np.inf])
+        starts = np.array([0.0, 50.0, 100.0, 150.0])
+        result = replace(
+            self.result, params=self.result.params.update(max_crest_factor=6.0),
+            diagnostics={**self.result.diagnostics, "candidate_starts": starts,
+                         "candidate_crest_factors": factors})
+        figure = hp.plot_crest_factor(result)
+        ax = figure.axes[0]
+        centers = (starts * result.diagnostics["dt_in_seconds"]
+                   + result.params.window_length_s / 2) / 60
+        np.testing.assert_allclose(ax.collections[0].get_offsets(),
+                                   np.column_stack((centers[:2], factors[:2])))
+        np.testing.assert_allclose(ax.collections[1].get_offsets(), [[centers[2], 7]])
+        for points, label, color in zip(ax.collections[:2], ("Passed", "Rejected"),
+                                        ("#009E73", "#D62728")):
+            self.assertEqual(points.get_label(), label)
+            np.testing.assert_array_equal(points.get_sizes(), [6])
+            np.testing.assert_allclose(points.get_facecolors()[0],
+                                       matplotlib.colors.to_rgba(color))
+        self.assertIn("infinite factor", ax.collections[2].get_label())
+        np.testing.assert_array_equal(ax.lines[0].get_ydata(), [6, 6])
+        self.assertEqual(ax.lines[0].get_label(), "Limits")
+        np.testing.assert_array_equal(result.diagnostics["candidate_crest_factors"], factors)
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        self.assertGreaterEqual(ax.get_legend().get_window_extent(renderer).y0,
+                                ax.title.get_window_extent(renderer).y1)
+        bounds = ax.get_tightbbox(renderer)
+        self.assertGreaterEqual(bounds.y0, 0)
+        self.assertLessEqual(bounds.y1, figure.bbox.height)
+        with self.assertRaisesRegex(ValueError, "disabled"):
+            hp.plot_crest_factor(self.result)
+
+    def test_component_crest_lines_connect_across_candidate_gaps(self):
+        starts = np.array([0, 20000, 40000])
+        components = {"Z": np.array([3., 4., 5.]), "N": np.array([4., 5., 7.]),
+                      "E": np.array([2., 3., 4.])}
+        result = replace(
+            self.result, params=self.result.params.update(max_crest_factor=6),
+            diagnostics={**self.result.diagnostics, "candidate_starts": starts,
+                         "candidate_crest_factors": np.array([4., 5., 7.]),
+                         "candidate_component_crest_factors": components})
+        figure = hp.plot_crest_factor(result, component_alpha=1)
+        centers = (starts * result.diagnostics["dt_in_seconds"]
+                   + result.params.window_length_s / 2) / 60
+        for line, key in zip(figure.axes[0].lines[1:], ("Z", "N", "E")):
+            np.testing.assert_array_equal(line.get_xdata(), centers)
+            np.testing.assert_array_equal(line.get_ydata(), components[key])
+            self.assertEqual(line.get_linestyle(), "-")
+            self.assertEqual(line.get_alpha(), 1)
 
     def test_all_windows_use_log_axis_without_data_clipping(self):
         ax = hp.plot_hvsr(self.result)
@@ -283,13 +336,15 @@ class NativePlotTests(unittest.TestCase):
     def test_fourier_visual_hierarchy_preserves_spectra(self):
         namespace = self._notebook_figure_namespace()
         controls = namespace["FIGURE_CONTROLS"].copy()
+        controls["show_raw_signals"] = False
         controls["show_unsmoothed_fourier"] = True
         figure = namespace["make_analysis_figure"](
             self.record, self.result, self.component_spectra, controls, hp.PAPER_STYLE,
             fourier_data=self.fourier_data)
         ax = figure.axes[1]
         for raw, mean, key in zip(ax.lines[::2], ax.lines[1::2], ("Z", "N", "E")):
-            self.assertEqual(raw.get_alpha(), 0.12)
+            self.assertEqual(raw.get_alpha(), 0.3)
+            self.assertEqual(raw.get_linewidth(), 0.5)
             self.assertEqual(mean.get_linewidth(), controls["fourier_line_width"])
             self.assertGreater(mean.get_linewidth(), raw.get_linewidth())
             self.assertEqual(mean.get_linestyle(), controls["component_linestyles"][key])
@@ -305,9 +360,126 @@ class NativePlotTests(unittest.TestCase):
         self.assertLessEqual(bounds.x1, figure.bbox.width)
         self.assertLessEqual(bounds.y1, figure.bbox.height)
 
+    def test_notebook_crest_row_shares_time_and_window_shading(self):
+        namespace = self._notebook_figure_namespace()
+        controls = namespace["FIGURE_CONTROLS"].copy()
+        controls["show_unsmoothed_fourier"] = False
+        result = hv.run_hvsr(
+            self.record, self.result.params.update(max_crest_factor=6), verbose=False)
+        spectra = hv.component_fourier_data(self.record, result).smoothed
+        figure = namespace["make_analysis_figure"](
+            self.record, result, spectra, controls, hp.PAPER_STYLE)
+        self.assertEqual(len(figure.axes), 7)
+        sta, crest, fourier, hvsr = figure.axes[:4]
+        for axis, label, attr in zip(figure.axes[4:], ("Vertical", "North", "East"),
+                                      ("vt", "ns", "ew")):
+            self.assertEqual(axis.get_ylabel(), label)
+            self.assertEqual(len(axis.get_yticks()), 0)
+            self.assertTrue(sta.get_shared_x_axes().joined(sta, axis))
+            np.testing.assert_array_equal(axis.collections[1].get_facecolors(),
+                                          sta.collections[0].get_facecolors())
+            times, lower, upper = hp.waveform_envelope(
+                getattr(self.record, attr).amplitude, self.record.vt.dt_in_seconds)
+            self.assertEqual(len(axis.collections[0].get_paths()), 1)
+            vertices = axis.collections[0].get_paths()[0].vertices
+            self.assertAlmostEqual(vertices[:, 1].min(), lower.min())
+            self.assertAlmostEqual(vertices[:, 1].max(), upper.max())
+            self.assertGreater(axis.get_position().y0, sta.get_position().y1)
+        self.assertTrue(sta.get_shared_x_axes().joined(sta, crest))
+        self.assertEqual(sta.get_xlim(), crest.get_xlim())
+        self.assertEqual(sta.get_xlabel(), "")
+        self.assertEqual(crest.get_xlabel(), "Time (min)")
+        self.assertEqual(crest.get_ylabel(), "Crest factor")
+        np.testing.assert_array_equal(
+            sta.collections[0].get_facecolors(), crest.collections[0].get_facecolors())
+        for sta_path, crest_path in zip(sta.collections[0].get_paths(),
+                                        crest.collections[0].get_paths()):
+            np.testing.assert_array_equal(sta_path.vertices, crest_path.vertices)
+        self.assertEqual(sum(len(points.get_offsets()) for points in crest.collections[1:]),
+                         len(result.diagnostics["candidate_starts"]))
+        starts = result.diagnostics["candidate_starts"]
+        nwin = result.diagnostics["n_win"]
+        for line, key, attr in zip(crest.lines[1:], ("Z", "N", "E"), ("vt", "ns", "ew")):
+            expected = []
+            for start in starts:
+                samples = getattr(self.record, attr).amplitude[start:start + nwin]
+                centered = samples - samples.mean()
+                expected.append(np.max(np.abs(centered)) / np.sqrt(np.mean(centered ** 2)))
+            np.testing.assert_allclose(line.get_ydata(), expected)
+            self.assertEqual(line.get_alpha(), controls["crest_component_alpha"])
+            self.assertEqual(line.get_color(), controls["component_colors"][key])
+        np.testing.assert_allclose(
+            np.max(list(result.diagnostics["candidate_component_crest_factors"].values()), axis=0),
+            result.diagnostics["candidate_crest_factors"])
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        self.assertGreater(sta.get_position().y0, crest.get_position().y1)
+        self.assertGreater(crest.get_position().y0, fourier.get_position().y1)
+        self.assertAlmostEqual(fourier.get_position().y0, hvsr.get_position().y0)
+        self.assertGreaterEqual(crest.get_legend().get_window_extent(renderer).y0,
+                                crest.bbox.y1)
+        annotation = crest.texts[0]
+        expected_minutes = result.n_windows * result.diagnostics["n_win"] * self.record.vt.dt_in_seconds / 60
+        total_minutes = (self.record.vt.n_samples - 1) * self.record.vt.dt_in_seconds / 60
+        self.assertEqual(annotation.get_text(),
+                         f"{result.n_windows}/{result.n_grid_windows} windows\n"
+                         f"Included/total time: {expected_minutes:.1f}/{total_minutes:.1f} min")
+        annotation_bounds = annotation.get_window_extent(renderer)
+        self.assertGreaterEqual(annotation_bounds.y0, crest.bbox.y1)
+        self.assertLessEqual(annotation_bounds.x1,
+                             crest.get_legend().get_window_extent(renderer).x0)
+        self.assertEqual(hvsr.title.get_fontweight(), "bold")
+        for ax in figure.axes:
+            bounds = ax.get_tightbbox(renderer)
+            self.assertGreaterEqual(bounds.x0, 0)
+            self.assertLessEqual(bounds.x1, figure.bbox.width)
+            self.assertGreaterEqual(bounds.y0, 0)
+            self.assertLessEqual(bounds.y1, figure.bbox.height)
+
+    def test_notebook_sesame_annotation_matches_calculated_metrics(self):
+        namespace = self._notebook_figure_namespace()
+        controls = namespace["FIGURE_CONTROLS"].copy()
+        controls.update(show_raw_signals=False, show_unsmoothed_fourier=False)
+        figure = namespace["make_analysis_figure"](
+            self.record, self.result, self.component_spectra, controls, hp.PAPER_STYLE)
+        annotation = figure.axes[2].texts[0]
+        metrics = hv.assess_sesame_quality(self.result, time_blocks=None)["metrics"]
+        self.assertEqual(annotation.get_text(),
+                         f"Reliability {metrics['reliability_count']}/3\n"
+                         f"Clarity {metrics['clarity_count']}/6")
+        self.assertEqual(annotation.get_fontweight(), "normal")
+        figure.canvas.draw()
+        bounds = annotation.get_window_extent(figure.canvas.get_renderer())
+        self.assertGreaterEqual(bounds.x0, figure.axes[2].bbox.x0)
+        self.assertLessEqual(bounds.x1, figure.axes[2].bbox.x1)
+        peak_bounds = figure.axes[2].title.get_window_extent(figure.canvas.get_renderer())
+        self.assertLessEqual(peak_bounds.x1, bounds.x0)
+        self.assertAlmostEqual(peak_bounds.y0, bounds.y0)
+
+    def test_selection_annotation_does_not_double_count_overlapping_windows(self):
+        namespace = self._notebook_figure_namespace()
+        controls = namespace["FIGURE_CONTROLS"].copy()
+        controls.update(show_raw_signals=False, show_unsmoothed_fourier=False)
+        result = hv.run_hvsr(
+            self.record, self.result.params.update(overlap_pct=50), verbose=False)
+        spectra = hv.component_fourier_data(self.record, result).smoothed
+        figure = namespace["make_analysis_figure"](
+            self.record, result, spectra, controls, hp.PAPER_STYLE)
+        covered = np.zeros(self.record.vt.n_samples, dtype=bool)
+        dt = self.record.vt.dt_in_seconds
+        for start_s in result.window_starts_s[result.valid_mask]:
+            start = round(start_s / dt)
+            covered[start:start + result.diagnostics["n_win"]] = True
+        included_min = covered.sum() * dt / 60
+        total_min = (self.record.vt.n_samples - 1) * dt / 60
+        self.assertIn(f"Included/total time: {included_min:.1f}/{total_min:.1f} min",
+                      figure.axes[0].texts[0].get_text())
+        self.assertLess(covered.sum(), result.n_windows * result.diagnostics["n_win"])
+
     def test_notebook_three_panel_layout_and_editable_controls(self):
         namespace = self._notebook_figure_namespace()
         controls = namespace["FIGURE_CONTROLS"].copy()
+        controls["show_raw_signals"] = False
         controls.update(height_in=4, sta_lta_ylim=(0, 5), grid=False,
                         sta_lta_components=("Z", "N", "E"))
         controls["component_colors"] = {"Z": "#00AA00", "N": "#222222", "E": "#AA00AA"}
@@ -362,14 +534,16 @@ class NativePlotTests(unittest.TestCase):
         renderer = figure.canvas.get_renderer()
         legend_bounds = hvsr_ax.get_legend().get_window_extent(renderer)
         peak_bounds = hvsr_ax.title.get_window_extent(renderer)
-        self.assertGreaterEqual(legend_bounds.y0, hvsr_ax.bbox.y1)
+        self.assertGreaterEqual(legend_bounds.x0, hvsr_ax.bbox.x0)
+        self.assertLessEqual(legend_bounds.x1, hvsr_ax.bbox.x1)
+        self.assertGreaterEqual(legend_bounds.y0, hvsr_ax.bbox.y0)
+        self.assertLessEqual(legend_bounds.y1, hvsr_ax.bbox.y1 + 1e-6)
         self.assertGreaterEqual(
             fourier_ax.get_legend().get_window_extent(renderer).y0, fourier_ax.bbox.y1)
-        self.assertGreaterEqual(peak_bounds.y0, legend_bounds.y1)
+        self.assertGreaterEqual(peak_bounds.y0, hvsr_ax.bbox.y1)
         self.assertEqual(hvsr_ax.title.get_fontsize(), controls["hvsr_title_font_size"])
-        self.assertEqual(hvsr_ax.title.get_horizontalalignment(), "center")
-        self.assertAlmostEqual((peak_bounds.x0 + peak_bounds.x1) / 2,
-                               (hvsr_ax.bbox.x0 + hvsr_ax.bbox.x1) / 2)
+        self.assertEqual(hvsr_ax.title.get_horizontalalignment(), "left")
+        self.assertAlmostEqual(peak_bounds.x0, hvsr_ax.bbox.x0)
         for ax in figure.axes:
             bounds = ax.get_tightbbox(renderer)
             self.assertGreaterEqual(bounds.x0, 0)
@@ -394,7 +568,7 @@ class NativePlotTests(unittest.TestCase):
             self.record, limited, limited_spectra, controls, style, fourier_data=limited_data)
         self.assertEqual(len(east_figure.axes[0].lines), 3)
         self.assertEqual([line.get_label() for line in east_figure.axes[0].lines[:2]],
-                         ["East", "Acceptance limits"])
+                         ["East", "Limits"])
         np.testing.assert_array_equal(
             east_figure.axes[0].lines[0].get_ydata(),
             hv.sta_lta_ratio(self.record.ew.amplitude, self.record.vt.dt_in_seconds,
@@ -445,14 +619,17 @@ class NativePlotTests(unittest.TestCase):
             self.assertTrue(line.get_rasterized())
         self.assertEqual(window_ax.get_yscale(), "log")
         self.assertEqual([text.get_text() for text in window_ax.get_legend().get_texts()],
-                         [r"$\sigma$", "Mean", "Individual windows"])
+                         [r"$\sigma$", "Mean"])
         window_figure.canvas.draw()
         window_renderer = window_figure.canvas.get_renderer()
         self.assertGreaterEqual(
             window_ax.title.get_window_extent(window_renderer).y0,
-            window_ax.get_legend().get_window_extent(window_renderer).y1)
+            window_ax.bbox.y1)
         window_legend = window_ax.get_legend().get_window_extent(window_renderer)
-        self.assertGreaterEqual(window_legend.y0, window_ax.bbox.y1)
+        self.assertGreaterEqual(window_legend.x0, window_ax.bbox.x0)
+        self.assertLessEqual(window_legend.x1, window_ax.bbox.x1)
+        self.assertGreaterEqual(window_legend.y0, window_ax.bbox.y0)
+        self.assertLessEqual(window_legend.y1, window_ax.bbox.y1 + 1e-6)
         for alpha in (-0.1, 1.1, np.nan):
             with self.subTest(alpha=alpha), self.assertRaisesRegex(ValueError, "window_alpha"):
                 hp.plot_hvsr(self.result, window_alpha=alpha)

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "PaperStyle", "PAPER_STYLE", "paper_context", "paper_subplots", "style_axes",
-    "label_panels", "save_figure", "plot_hvsr", "plot_window_selection",
+    "label_panels", "save_figure", "plot_hvsr", "plot_window_selection", "plot_crest_factor",
     "plot_time_blocks", "plot_hvsr_summary", "waveform_envelope",
 ]
 
@@ -219,6 +219,66 @@ def plot_hvsr(result: HVSRResult, show_windows: bool = True, title: str = "HVSR"
                 va="top", fontsize=style.legend_size)
         ax.legend(loc="upper left", bbox_to_anchor=(0, 0.8), fontsize=style.legend_size, frameon=False)
         return ax
+
+
+def plot_crest_factor(result: HVSRResult, *, ax: Axes | None = None,
+                      component_alpha: float | None = None,
+                      component_colors: Mapping[str, str] | None = None,
+                      style: PaperStyle = PAPER_STYLE) -> Figure:
+    """Show candidate peak/RMS screening at window centers, before spectral rejection."""
+    threshold = result.params.max_crest_factor
+    if threshold is None:
+        raise ValueError("Crest-factor screening is disabled; no factors were calculated.")
+    starts = np.asarray(result.diagnostics["candidate_starts"])
+    factors = np.asarray(result.diagnostics["candidate_crest_factors"])
+    if not starts.size or factors.shape != starts.shape:
+        raise ValueError("Provide matching, nonempty candidate starts and crest factors.")
+    if np.any(np.isnan(factors)) or np.any(factors < 0):
+        raise ValueError("Candidate crest factors must be nonnegative and not NaN.")
+    if component_alpha is not None and (
+            not np.isfinite(component_alpha) or not 0 <= component_alpha <= 1):
+        raise ValueError("component_alpha must be finite and between 0 and 1.")
+    starts_s = starts * result.diagnostics["dt_in_seconds"]
+    centers = (starts_s + result.params.window_length_s / 2) / 60
+    finite = np.isfinite(factors)
+    accepted = finite & (factors <= threshold)
+    rejected = finite & (factors > threshold)
+    with paper_context(style):
+        if ax is None:
+            _, axes = paper_subplots(height_in=2.0, style=style)
+            ax = axes[0, 0]
+        ax.scatter(centers[accepted], factors[accepted], color="#009E73", marker="o",
+                   s=6, linewidths=0, label="Passed", zorder=3)
+        ax.scatter(centers[rejected], factors[rejected], color="#D62728", marker="o",
+                   s=6, linewidths=0, label="Rejected", zorder=3)
+        if np.any(~finite):
+            display_height = max(threshold, float(factors[finite].max()) if finite.any() else 0) * 1.1
+            ax.scatter(centers[~finite], np.full((~finite).sum(), display_height),
+                       color="#D62728", marker="^", s=6, label="Rejected: zero RMS (infinite factor)")
+        ax.axhline(threshold, color="0.4", ls="--", lw=0.8,
+                   label="Limits")
+        if component_alpha is not None:
+            components = result.diagnostics.get("candidate_component_crest_factors")
+            if components is None:
+                raise ValueError("Rerun processing to calculate component crest factors.")
+            colors = ({"Z": "#24476B", "N": "#619BC2", "E": "#666666"}
+                      if component_colors is None else component_colors)
+            for key, label in (("Z", "Vertical"), ("N", "North"), ("E", "East")):
+                values = np.asarray(components[key])
+                if values.shape != factors.shape or np.any(np.isnan(values)) or np.any(values < 0):
+                    raise ValueError("Component crest factors must match candidates and be nonnegative.")
+                values = np.where(np.isfinite(values), values, np.nan)
+                ax.plot(centers, values, color=colors[key], linestyle="-",
+                        alpha=component_alpha, lw=0.8, label=label, zorder=2)
+        duration = (result.record_meta["duration_s"] if "duration_s" in result.record_meta
+                    else float(starts_s.max() + result.params.window_length_s))
+        ax.set(xlim=(0, duration / 60), ylim=(0, None),
+               xlabel="Time (min)", ylabel="Crest factor",
+               title="Maximum component crest factor per candidate window")
+        ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.18), ncols=2,
+                  fontsize=style.legend_size)
+        style_axes(ax, style=style)
+        return ax.figure
 
 
 def waveform_envelope(amplitude: np.ndarray, dt: float, max_bins: int = 4000):

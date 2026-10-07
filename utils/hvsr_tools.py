@@ -305,19 +305,22 @@ def select_windows(record: hvsrpy.SeismicRecording3C, params: HVSRParams) -> tup
         starts = np.asarray(selected, dtype=int)
     candidates = starts.copy()
     crest = np.full(candidates.size, np.nan)
+    component_crest = {key: np.full(candidates.size, np.nan) for key in _COMPONENTS}
     if params.max_crest_factor is not None:
         for index, start in enumerate(candidates):
             factors = []
-            for attr in _COMPONENTS.values():
+            for key, attr in _COMPONENTS.items():
                 samples = getattr(record, attr).amplitude[start:start + length]
                 centered = samples - samples.mean()
                 rms = float(np.sqrt(np.mean(centered ** 2)))
                 factors.append(float(np.max(np.abs(centered))) / rms if rms > 0 else np.inf)
+                component_crest[key][index] = factors[-1]
             crest[index] = max(factors)
         starts = candidates[crest <= params.max_crest_factor]
     return starts, {"n_win": length, "dt_in_seconds": dt, "n_grid_windows": grid.size,
                     "valid_fraction": float(valid.mean()), "sta_lta": ratios,
                     "candidate_starts": candidates, "candidate_crest_factors": crest,
+                    "candidate_component_crest_factors": component_crest,
                     "n_crest_rejected": int(candidates.size - starts.size)}
 
 

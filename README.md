@@ -173,7 +173,24 @@ axes and no top/right spines. The supplied references guide the visual styling,
 not the scientific content. Styling is scoped, without changing global Matplotlib
 defaults or requiring LaTeX or additional fonts.
 
-The notebook creates one three-panel analysis figure: raw Vertical/North/East
+Before the analysis figure, a dedicated cell plots the raw Vertical/North/East
+recordings in three aligned time panels without preprocessing or window shading.
+Min/max envelopes preserve extrema for display without modifying the recordings;
+each panel uses its own amplitude scale, with amplitude ticks hidden and
+normal-weight component labels on the left. No window shading is included. The export
+cell saves this figure as `*_raw.pdf`, `*_raw.svg` and `*_raw.png`.
+
+The combined analysis figure includes the three raw signals at the top, with
+the same accepted-window shading and shared time axis as STA/LTA and crest factor.
+Set `show_raw_signals=False` to omit them or `raw_height_ratio` to change the
+height of the waveform group. The standalone raw-signal cell remains available.
+An annotation above crest factor (or STA/LTA when crest screening is disabled)
+reports retained/reference-grid window counts and
+included/total recording time in minutes. Included time counts the union of
+retained windows, so overlapping samples are not counted twice. The window-count
+denominator is the regular-grid reference, not the number of crest-check candidates.
+
+The notebook creates an analysis figure: raw Vertical/North/East
 STA/LTA together across the top, component Fourier amplitudes below left, and
 HVSR mean/scatter below right. There are no waveform rows or panel letters.
 Its dedicated plotting cell contains the layout and drawing code; edit
@@ -183,6 +200,21 @@ scales. `FIGURE_STYLE` still controls width, typography, HVSR color and export
 DPI. Rerun only the plotting cell to restyle existing results, then rerun the
 export cell to update `*_analysis.pdf`, `*_analysis.svg` and `*_analysis.png`.
 Controls are recorded in the JSON provenance.
+
+A second full-width row below STA/LTA shows the maximum component peak/RMS ratio
+at the center of every candidate window that passed STA/LTA and padding.
+Small green dots pass the crest check; red dots fail it; the dashed line is
+the configured limit. This explains exclusions that are not apparent in the
+STA/LTA curve. These are crest-check decisions, not subsequent spectral checks.
+It shares the time axis and accepted-window shading with STA/LTA. This row is
+overlaid with solid Vertical/North/East crest-factor lines using the
+component colors; `crest_component_alpha` controls opacity (default 1.0).
+Values are calculated per candidate window. Lines connect consecutive candidates
+even across gaps; these connections do not represent additional calculated values.
+Rerun processing after updating the utilities to populate these values.
+The row is
+omitted when `max_crest_factor=None` and otherwise included in the analysis
+PDF/SVG/PNG exports. Set `crest_height_ratio` to adjust its relative height.
 
 Component Fourier spectra are computed in the processing cell using the same
 accepted windows, orientation, filter, detrend, taper, FFT settings and native
