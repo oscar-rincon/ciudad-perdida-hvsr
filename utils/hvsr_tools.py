@@ -29,6 +29,7 @@ __all__ = [
     "plot_window_selection", "plot_time_blocks", "save_outputs", "component_fourier_spectra",
     "ComponentFourierData", "component_fourier_data",
     "vector_sta_lta_ratio",
+    "accepted_signal_coverage",
 ]
 
 _COMPONENTS = {"N": "ns", "E": "ew", "Z": "vt"}
@@ -441,6 +442,25 @@ def _processing_settings(params: HVSRParams) -> hvsrpy.HvsrTraditionalProcessing
     return settings
 
 
+def _prepare_spectral_grid(windows: list[hvsrpy.SeismicRecording3C],
+                           settings: hvsrpy.HvsrTraditionalProcessingSettings) -> np.ndarray:
+    prepare_fft_settings(windows, settings)
+    frequency = np.fft.rfftfreq(settings.fft_settings["n"], windows[0].vt.dt_in_seconds)
+    centers = np.asarray(settings.smoothing["center_frequencies_in_hz"])
+    operator = settings.smoothing["operator"]
+    support = SMOOTHING_OPERATORS[operator](
+        frequency, np.ones((1, frequency.size)), centers, settings.smoothing["bandwidth"])[0]
+    unsupported = centers[~np.isfinite(support) | (support <= 0)]
+    if unsupported.size:
+        raise ValueError(
+            f"{operator} smoothing has no usable FFT support at {unsupported.size}/{centers.size} "
+            f"frequency centers ({unsupported.min():.6g}-{unsupported.max():.6g} Hz); "
+            f"FFT bin spacing is {frequency[1]:.6g} Hz. Increase window_length_s or revise the "
+            "frequency grid/smoothing settings. Zero-padding does not improve the physical "
+            "frequency resolution of a short window.")
+    return frequency
+
+
 @dataclass
 class ComponentFourierData:
     """Accepted-window amplitudes before and after native smoothing."""
@@ -461,9 +481,8 @@ def component_fourier_data(record: hvsrpy.SeismicRecording3C,
         raise ValueError("Accepted windows fall outside the supplied recording.")
     windows = _prepare_windows(record, result.params, starts, length)
     settings = _processing_settings(result.params)
-    prepare_fft_settings(windows, settings)
+    fft_frequency = _prepare_spectral_grid(windows, settings)
     dt = record.vt.dt_in_seconds
-    fft_frequency = np.fft.rfftfreq(settings.fft_settings["n"], dt)
     spectra = {}
     raw_spectra = {}
     for window in windows:
@@ -501,6 +520,8 @@ def run_hvsr(record: hvsrpy.SeismicRecording3C, params: HVSRParams, verbose: boo
     if starts.size < 2:
         raise ValueError("Fewer than two windows remain; review length and selection settings.")
     windows = _prepare_windows(record, params, starts, diagnostics["n_win"])
+    # hvsrpy's FFT preparation is not idempotent for an explicit unpadded length.
+    _prepare_spectral_grid(windows, _processing_settings(params))
     settings = _processing_settings(params)
     hvsr = hvsrpy.process(windows, settings)
     if not np.isfinite(hvsr.amplitude).all() or np.any(hvsr.amplitude <= 0):
@@ -531,6 +552,27 @@ def _interior_peak(frequency: np.ndarray, curve: np.ndarray, limits) -> tuple[fl
         raise ValueError("No interior peak found in the requested frequency band.")
     index = indices[np.argmax(curve[indices])]
     return float(frequency[index]), float(curve[index])
+
+
+def accepted_signal_coverage(result: HVSRResult) -> dict:
+    """Accepted interval union; reused samples do not add unique signal time."""
+    length_s = result.diagnostics["n_win"] * result.diagnostics["dt_in_seconds"]
+    covered_end = unique_duration_s = 0.0
+    for start in np.sort(result.window_starts_s[result.valid_mask]):
+        end = start + length_s
+        unique_duration_s += max(0.0, end - max(float(start), covered_end))
+        covered_end = max(covered_end, end)
+    nominal_duration_s = result.n_windows * length_s
+    return {
+        "overlap_pct": result.params.overlap_pct,
+        "accepted_windows": result.n_windows,
+        "unique_duration_min": unique_duration_s / 60,
+        "nominal_window_duration_min": nominal_duration_s / 60,
+        "reused_duration_min": (nominal_duration_s - unique_duration_s) / 60,
+        "cycles_from_unique_coverage_at_f0": unique_duration_s * result.peak[0],
+        "minimum_frequency_for_10_cycles_hz": 10 / length_s,
+        "independent_window_count": None,
+    }
 
 
 def assess_sesame_quality(result: HVSRResult, time_blocks: int | None = 4) -> dict:

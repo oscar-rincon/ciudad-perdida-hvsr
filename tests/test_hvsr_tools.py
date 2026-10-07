@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 import warnings
+from dataclasses import replace
 from unittest.mock import patch
 from pathlib import Path
 
@@ -151,12 +152,12 @@ class LoaderTests(unittest.TestCase):
             self.assertEqual(record.meta["station"], "TEST")
 
     def test_multicomponent_seed(self):
-        record = hv.load_record(ROOT / "data/accelerometer/CBUCF_titanSMA_1614_20230519_221100.seed")
+        record = hv.load_record(ROOT / "data/accelerometer/2023-05-19/CBUCF_titanSMA_1614_20230519_221100.seed")
         self.assertGreater(record.vt.n_samples, 1)
         self.assertEqual(record.ns.n_samples, record.vt.n_samples)
 
     def test_continuous_interval_in_gapped_seed(self):
-        path = ROOT / "data/accelerometer/CBUCF_titanSMA_1614_20230519_213500.seed"
+        path = ROOT / "data/accelerometer/2023-05-19/CBUCF_titanSMA_1614_20230519_213500.seed"
         with self.assertRaisesRegex(ValueError, "gaps"):
             hv.load_record(path)
         record = hv.load_record(path, starttime="2023-05-19T21:35:25",
@@ -165,7 +166,7 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(record.ns.n_samples, record.vt.n_samples)
 
     def test_daily_miniseed_triplet(self):
-        files = {c: ROOT / f"data/accelerometer/LB.CBUCF.10.HN{c}_titanSMA_1614_20230522_000000.miniseed" for c in "NEZ"}
+        files = {c: ROOT / f"data/accelerometer/2023-05-22/LB.CBUCF.10.HN{c}_titanSMA_1614_20230522_000000.miniseed" for c in "NEZ"}
         with self.assertRaisesRegex(ValueError, "Gaps|gaps|overlaps"):
             hv.load_record(files)
 
@@ -212,11 +213,45 @@ class ProcessingTests(unittest.TestCase):
         np.testing.assert_allclose(repeated.mean_curve, self.result.mean_curve)
         self.assertAlmostEqual(self.result.peak[0], 3, delta=0.1)
 
+    def test_nonoverlapping_coverage_does_not_count_reused_samples(self):
+        coverage = hv.accepted_signal_coverage(self.result)
+        self.assertEqual(coverage["reused_duration_min"], 0)
+        self.assertAlmostEqual(coverage["unique_duration_min"], self.result.n_windows * 32 / 60)
+        self.assertAlmostEqual(coverage["minimum_frequency_for_10_cycles_hz"], 10 / 32)
+        self.assertIsNone(coverage["independent_window_count"])
+
     def test_nyquist_guard_and_empty_selection(self):
         with self.assertRaisesRegex(ValueError, "Nyquist"):
             hv.run_hvsr(self.record, hv.HVSRParams(), verbose=False)
         with self.assertRaisesRegex(ValueError, "Fewer than two"):
             hv.run_hvsr(self.record, self.params.update(window_length_s=300), verbose=False)
+
+    def test_short_window_fails_before_native_processing(self):
+        with patch("utils.hvsr_tools.hvsrpy.process") as process:
+            with self.assertRaisesRegex(ValueError, "no usable FFT support.*FFT bin spacing is 1 Hz"):
+                hv.run_hvsr(self.record, self.params.update(window_length_s=1), verbose=False)
+            process.assert_not_called()
+
+    def test_smoothing_guard_checks_interior_centers_not_only_fmin(self):
+        params = self.params.update(window_length_s=1, fmin=1)
+        with self.assertRaisesRegex(ValueError, "no usable FFT support"):
+            hv.run_hvsr(self.record, params, verbose=False)
+
+    def test_component_spectra_use_same_smoothing_guard(self):
+        result = replace(self.result, params=self.params.update(window_length_s=1),
+                         diagnostics={**self.result.diagnostics, "n_win": 50})
+        with self.assertRaisesRegex(ValueError, "no usable FFT support"):
+            hv.component_fourier_data(self.record, result)
+
+    def test_supported_grid_preserves_native_processing_with_and_without_padding(self):
+        for padding in (False, True):
+            with self.subTest(padding=padding):
+                params = self.params.update(fft_zero_padding=padding)
+                result = hv.run_hvsr(self.record, params, verbose=False)
+                starts, diagnostics = hv.select_windows(self.record, params)
+                windows = hv._prepare_windows(self.record, params, starts, diagnostics["n_win"])
+                native = hvsrpy.process(windows, hv._processing_settings(params))
+                np.testing.assert_allclose(result.hvsr.amplitude, native.amplitude, rtol=1e-12)
 
     def test_sweep_preserves_success_and_reports_failure(self):
         with warnings.catch_warnings(record=True) as caught:
@@ -262,6 +297,113 @@ class ProcessingTests(unittest.TestCase):
         self.assertEqual(quality["criteria"], hv.assess_sesame_quality(self.result)["criteria"])
         with self.assertRaises(ValueError):
             hv.assess_sesame_quality(self.result, time_blocks=1)
+
+
+class TerrazaShortWindowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.record = hv.load_record(
+            ROOT / "data/accelerometer/2023-05-19/CBUCF_titanSMA_1614_20230519_213500.seed",
+            starttime="2023-05-19T21:35:24.665000Z", endtime="2023-05-19T21:59:42.835000Z")
+        cls.params = hv.HVSRParams(
+            window_length_s=16, window_selection="continuous", anti_trigger=True,
+            lta_s=30, sta_lta_method="vector", transient_padding_s=2, max_crest_factor=6)
+
+    def test_shorter_profile_retains_more_nonoverlapping_windows_without_clarity_pass(self):
+        baseline = hv.run_hvsr(self.record, self.params.update(window_length_s=32), verbose=False)
+        result = hv.run_hvsr(self.record, self.params, verbose=False)
+        self.assertEqual(baseline.n_windows, 5)
+        self.assertEqual(result.n_windows, 16)
+        starts = result.window_starts_s[result.valid_mask]
+        self.assertTrue((np.diff(starts) >= 16).all())
+        self.assertAlmostEqual(result.n_windows * 16 / 60, 4.266666666666667)
+        np.testing.assert_allclose(result.peak, [1.334517, 1.453200],
+                                   rtol=1e-6)
+        quality = hv.assess_sesame_quality(result, time_blocks=None)["metrics"]
+        self.assertEqual(quality["reliability_count"], 3)
+        self.assertEqual(quality["clarity_count"], 2)
+        self.assertFalse(quality["sesame_passed"])
+        self.assertTrue(all(np.isfinite(values).all()
+                            for values in hv.component_fourier_spectra(self.record, result).values()))
+
+    def test_twelve_second_profile_reports_unsupported_grid(self):
+        with self.assertRaisesRegex(ValueError, "no usable FFT support"):
+            hv.run_hvsr(self.record, self.params.update(window_length_s=12), verbose=False)
+
+    def test_selected_twenty_second_profile_preserves_quality_limitations(self):
+        params = self.params.update(window_length_s=20, sta_lta_min=.1, sta_lta_max=3,
+                                    max_crest_factor=15, detrend="linear",
+                                    frequency_domain_rejection=True)
+        result = hv.run_hvsr(self.record, params, verbose=False)
+        quality = hv.assess_sesame_quality(result, time_blocks=4)
+        self.assertEqual(result.n_windows_time_selection, 37)
+        self.assertEqual(result.n_windows, 35)
+        np.testing.assert_allclose(result.peak, [11.061743, 1.415235], rtol=1e-6)
+        self.assertEqual(quality["metrics"]["reliability_count"], 3)
+        self.assertEqual(quality["metrics"]["clarity_count"], 3)
+        self.assertTrue(quality["metrics"]["frequency_coverage_complete"])
+        self.assertTrue(quality["metrics"]["time_blocks_complete"])
+        self.assertFalse(quality["metrics"]["sesame_passed"])
+        self.assertLess(quality["metrics"]["block_tracked_max_deviation_pct"], 6.3)
+        self.assertGreater(quality["metrics"]["block_global_max_deviation_pct"], 98)
+
+    def test_selected_profile_with_overlap_adds_unique_coverage_not_clarity(self):
+        params = self.params.update(window_length_s=20, overlap_pct=50,
+                                    sta_lta_min=.1, sta_lta_max=3,
+                                    max_crest_factor=15, detrend="linear",
+                                    frequency_domain_rejection=True)
+        result = hv.run_hvsr(self.record, params, verbose=False)
+        self.assertEqual(result.n_windows_time_selection, 75)
+        self.assertEqual(result.n_windows, 69)
+        np.testing.assert_allclose(result.peak, [11.061743, 1.406019], rtol=1e-6)
+        starts = result.window_starts_s[result.valid_mask]
+        self.assertTrue((np.diff(starts) < 20).any())
+        covered_end = unique_duration_s = 0.
+        for start in starts:
+            end = start + 20
+            unique_duration_s += max(0., end - max(start, covered_end))
+            covered_end = max(covered_end, end)
+        self.assertAlmostEqual(unique_duration_s, 890)
+        self.assertLess(unique_duration_s, result.n_windows * 20)
+        coverage = hv.accepted_signal_coverage(result)
+        self.assertAlmostEqual(coverage["unique_duration_min"], 890 / 60)
+        self.assertAlmostEqual(coverage["reused_duration_min"], (69 * 20 - 890) / 60)
+        self.assertEqual(coverage["minimum_frequency_for_10_cycles_hz"], .5)
+        self.assertIsNone(coverage["independent_window_count"])
+        quality = hv.assess_sesame_quality(result, time_blocks=4)["metrics"]
+        self.assertEqual(quality["clarity_count"], 3)
+        self.assertFalse(quality["sesame_passed"])
+        spectra = hv.component_fourier_spectra(self.record, result)
+        peak_index = int(np.argmin(abs(result.frequency - result.peak[0])))
+        ratios = [np.exp(np.log(spectra[component] / spectra["Z"]).mean(axis=0))[peak_index]
+                  for component in ("N", "E")]
+        np.testing.assert_allclose(ratios, [1.681015547928202, .8683435703727667], rtol=1e-12)
+        self.assertFalse((abs(result.window_peaks[:, 0] / result.peak[0] - 1) <= .05).any())
+        before_rejection = np.exp(np.log(result.hvsr.amplitude).mean(axis=0))
+        self.assertAlmostEqual(before_rejection[peak_index], 1.4002818148873104)
+
+    def test_relaxed_screening_and_processing_sweep_do_not_establish_clear_peak(self):
+        params = self.params.update(sta_lta_min=.1, sta_lta_max=3,
+                                    max_crest_factor=15, detrend="linear")
+        result = hv.run_hvsr(self.record, params, verbose=False)
+        quality = hv.assess_sesame_quality(result, time_blocks=4)
+        self.assertEqual(result.n_windows, 59)
+        self.assertLess(result.peak[1], 2)
+        self.assertEqual(quality["metrics"]["clarity_count"], 2)
+        self.assertTrue(quality["metrics"]["time_blocks_complete"])
+        self.assertGreater(quality["metrics"]["block_global_max_deviation_pct"], 90)
+        grid = {"window_length_s": (16., 20., 24., 32.),
+                "smoothing_bandwidth": (20., 40., 60.),
+                "detrend": ("constant", "linear"),
+                "frequency_domain_rejection": (False, True)}
+        with warnings.catch_warnings(record=True) as caught:
+            profiles = hv.parameter_sweep(self.record, params, grid, time_blocks=4)
+        self.assertEqual(len(profiles), 48)
+        self.assertTrue(profiles["error"].notna().any())
+        self.assertTrue(caught)
+        self.assertFalse(profiles["sesame_passed"].fillna(False).any())
+        self.assertEqual(params.detrend, "linear")
+        self.assertFalse(params.frequency_domain_rejection)
 
 
 class StationRegressionTests(unittest.TestCase):

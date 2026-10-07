@@ -9,6 +9,11 @@ ambient-vibration H/V analysis. No external reference curve is needed.
 data/
   sac/                    00P2-2 N/E/Z recordings
   accelerometer/          daily miniSEED and individual SEED recordings
+    2023-05-18/           three daily component files + sessions.json
+    2023-05-19/           seven unique files + sessions.json
+    2023-05-20/           fourteen unique files + sessions.json
+    2023-05-22/           eight unique files + sessions.json
+    catalog/              inventory, intervals and historical source audit
   ascii/                  original Minishark text recording
 main/
   01_processing/
@@ -68,7 +73,7 @@ Edit `INPUT_FILES`, `STARTTIME` and `ENDTIME` in the notebook:
 For example, a continuous supplied accelerometer recording:
 
 ```python
-INPUT_FILES = ROOT / "data/accelerometer/CBUCF_titanSMA_1614_20230519_221100.seed"
+INPUT_FILES = ROOT / "data/accelerometer/2023-05-19/CBUCF_titanSMA_1614_20230519_221100.seed"
 ```
 
 Several daily and individual accelerometer recordings contain genuine gaps.
@@ -76,7 +81,7 @@ Select a continuous UTC interval explicitly rather than interpolating across
 missing data. A verified interval is:
 
 ```python
-INPUT_FILES = ROOT / "data/accelerometer/CBUCF_titanSMA_1614_20230519_213500.seed"
+INPUT_FILES = ROOT / "data/accelerometer/2023-05-19/CBUCF_titanSMA_1614_20230519_213500.seed"
 STARTTIME = "2023-05-19T21:35:25"
 ENDTIME = "2023-05-19T21:45:00"
 ```
@@ -84,6 +89,105 @@ ENDTIME = "2023-05-19T21:45:00"
 The Minishark text file is preserved unchanged but is **not loaded by this
 workflow**: its channel ordering and instrument metadata must be verified before
 conversion to an N/E/Z recording.
+
+### Accelerometer recording catalog
+
+All accelerometer waveforms are consolidated under `data/accelerometer/YYYY-MM-DD/`,
+using UTC dates from `intervals.csv` checked against the actual signal headers.
+The 32 unique recordings retain their original names and exact bytes. Verified
+duplicate copies, archives and Windows download metadata from `Datos Acelerografo/`
+were removed after auditing all waveform payloads, including the May 22 `.part`
+files. Matching bytes demonstrate duplication, not that an incomplete download
+is complete. Different daily/individual exports are retained even if their time
+ranges overlap; no samples are interpolated, merged or discarded.
+
+`data/accelerometer/catalog/` provides:
+
+- `files.csv`: canonical files, actual header times, channels, rates and gaps.
+- `source_audit.csv`: historical exact matches from supplied loose files and archive members.
+- `intervals.csv`: common, continuous N/E/Z intervals checked by `load_record`.
+- `summary.json`: audit totals and time-selection eligibility.
+- `consolidation_log.csv`: original paths and hashes of removed duplicates/metadata.
+
+Each `data/accelerometer/YYYY-MM-DD/` folder also contains `sessions.json` with
+notebook inputs and interval boundaries pointing to the unique recordings.
+
+For an interactive review, run
+[01_data_organization.ipynb](main/01_data_organization/01_data_organization.ipynb).
+It validates catalog input paths, displays N/E/Z recording-set counts by date,
+and sorts both recording sets and all continuous intervals by timezone-aware
+`start_bogota` (earliest first). The interval review defaults to individual exports
+(`SOURCE_KIND = 'individual_export'`) with durations strictly longer than five
+minutes (`MIN_DURATION_MIN = 5.0`); full inventory counts remain
+unchanged. Optional date/source filters narrow the interval
+table without modifying the catalog or raw signals. Recording-set coverage
+bounds can contain gaps; overlapping exports are not independent measurements.
+
+Dates and times come from SEED headers, **not** the midnight names of daily files.
+Header times are UTC; the catalog also displays America/Bogota time (UTC-05:00)
+for comparison with future field notes. Instrument clock accuracy is not verified.
+The station and SEED location codes are identifiers, not geographic coordinates.
+Physical sites, latitude and longitude remain unknown without a field log.
+Even if the instrument moved, a new interval does not prove a new site.
+Orientation, calibration and compatible component responses still need verification.
+
+Regenerate the catalog from the repository root:
+
+```bash
+python -m utils.accelerometer_catalog
+```
+
+No archive reader is needed after consolidation. If new originals are supplied in
+`Datos Acelerografo/`, `--archive-reader /path/to/bsdtar` is needed to audit RAR
+payloads; ZIP reading uses Python's standard library. Historical source hashes
+are preserved and checked against the retained files on regeneration.
+The command fails explicitly for unmatched payloads or unsafe triplets.
+Generated catalogs are overwritten; preserve future field notes separately.
+The command reads literal `HVSRParams` values from the notebook without executing
+it, and measures time-selected windows for every interval using those exact
+settings. Each date manifest records the profile used; regenerate after edits.
+Daily and individual exports may cover the same time. Select **one** source per
+analysis, and do not interpret these overlapping exports as independent sites.
+
+In the existing notebook, replace the input-selection lines (before `load_record`)
+with a session from a date manifest, retaining the existing processing and plotting
+cells:
+
+```python
+import json
+
+manifest = json.loads(
+    (ROOT / "data/accelerometer/2023-05-19/sessions.json").read_text()
+)
+# Loader example only; this interval fails the current 200-second profile.
+session = next(
+    item for item in manifest["sessions"]
+    if item["session_id"] == "CBUCF_titanSMA_1614_20230519_221100_01"
+)
+INPUT_FILES = [ROOT / path for path in session["input_files"]]
+STARTTIME = session["starttime"]
+ENDTIME = session["endtime"]
+OUTPUT_PREFIX = session["session_id"]
+```
+
+Use a unique output prefix for each interval. Loader verification means the samples
+can be loaded safely, **not** that HVSR quality criteria pass. Some intervals are
+too short for the notebook's window length and STA/LTA startup; inspect duration
+and retained windows before interpreting a result. Keep the same scientific
+method, but review settings for the accelerometer rather than assuming the SAC
+profile is optimal. Do not shorten windows or loosen screening merely to force
+an interval to pass.
+
+The audited dataset contains **32 canonical files**, matching **50 supplied
+waveform payloads**, and **65 loadable intervals**: 3 on May 18, 12 on May 19,
+36 on May 20 and 14 on May 22, 2023 (UTC). These counts include overlapping daily
+and individual exports, not 65 independent field measurements.
+With the notebook's current **200-second** continuous windows, vector STA/LTA,
+2-second transient padding and crest-factor limit 6, **59 intervals retain zero
+windows and six retain one**. None meets the processor's minimum of two
+time-selected windows. No H/V peaks or SESAME passes can be reported for this
+profile. Window length and screening need an explicit scientific review for these
+recordings; the catalog does not change them automatically.
 
 ## Processing controls
 
@@ -100,6 +204,42 @@ combination, frequency grid, peak-search band and frequency-domain rejection.
 - The default quadratic horizontal combination is hvsrpy's `squared_average`.
 - Konno-Ohmachi smoothing is native hvsrpy amplitude smoothing. There are no
   custom spectral kernels or external-tool compatibility settings.
+- HVSR and component spectra check every smoothing center against the actual
+  FFT grid before processing. Unsupported centers raise an error instead of
+  producing zero/zero ratios. For example, 1-second windows without padding
+  have 1 Hz FFT spacing and cannot support the 0.2-45 Hz, bandwidth-40 profile.
+  Increase window duration or revise the frequency grid/smoothing settings;
+  zero-padding does not improve a short window's physical frequency resolution.
+- [The Terraza 28 notebook](main/02_processing/hvsr_analysis_terraza_28.ipynb)
+  keeps only the selected 20-second exploratory configuration with 50% overlap
+  (10-second steps):
+  linear detrending, Konno-Ohmachi bandwidth 40, STA/LTA 0.1-3.0, crest limit 15,
+  and frequency-domain rejection with n=2.5. Among the earlier 48 tested profiles,
+  eligible profiles had reliability 3/3, full frequency coverage and complete
+  chronological blocks; ranking prioritized clarity, then the smallest tracked
+  block-peak deviation, then window count. Adding 50% overlap to that profile
+  retains 69 windows covering 14.83 unique minutes, compared with 35 windows
+  covering 11.67 minutes without overlap. The peak remains near 11.06 Hz with
+  A0 about 1.41. Clarity is only 3/6: SESAME still fails. Overlapping windows are
+  correlated; native window-count-based cycle totals reuse samples. Unique
+  coverage is displayed/exported separately, not as an independent-window count.
+  The notebook includes the selected curve, nine criteria, four chronological
+  blocks and provenance exports, without rerunning sweeps or comparing sessions.
+  Export names identify duration, overlap and the selected rejection profile.
+  Same-record tuning is not independent evidence of a site resonance.
+- The selected-profile diagnostics also compare separately smoothed N/Z and
+  E/Z amplitudes, H/V before/after spectral rejection and each window's main
+  peak versus the mean-curve peak. These component ratios are not a
+  reconstruction of the combined-horizontal HVSR or proof of geological
+  anisotropy; orientation and component responses remain unverified. The
+  +/-5% peak agreement count is descriptive, not another SESAME criterion.
+  Shared `accepted_signal_coverage` reports unique and reused signal duration,
+  and the frequency needed for 10 cycles per actual window. With 20-second
+  windows, the displayed band below 0.5 Hz has fewer than 10 cycles per window.
+  The component-ratio CSV, diagnostic figures and numerical checks are exported.
+  The Terraza 28 crest panel hides Passed/Rejected markers and legend entries
+  (`plot_crest_factor(show_decisions=False)`), retaining component lines and limits.
+  Screening decisions and exports are unchanged.
 - Statistics use lognormal mean/scatter. SESAME peak-frequency scatter uses
   the normal standard deviation of window peaks, as required by hvsrpy.
 - Every processing run creates fresh windows because hvsrpy tapers in place.

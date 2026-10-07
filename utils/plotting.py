@@ -222,6 +222,7 @@ def plot_hvsr(result: HVSRResult, show_windows: bool = True, title: str = "HVSR"
 
 
 def plot_crest_factor(result: HVSRResult, *, ax: Axes | None = None,
+                      show_decisions: bool = True,
                       component_alpha: float | None = None,
                       component_colors: Mapping[str, str] | None = None,
                       style: PaperStyle = PAPER_STYLE) -> Figure:
@@ -247,11 +248,12 @@ def plot_crest_factor(result: HVSRResult, *, ax: Axes | None = None,
         if ax is None:
             _, axes = paper_subplots(height_in=2.0, style=style)
             ax = axes[0, 0]
-        ax.scatter(centers[accepted], factors[accepted], color="#009E73", marker="o",
-                   s=6, linewidths=0, label="Passed", zorder=3)
-        ax.scatter(centers[rejected], factors[rejected], color="#D62728", marker="o",
-                   s=6, linewidths=0, label="Rejected", zorder=3)
-        if np.any(~finite):
+        if show_decisions:
+            ax.scatter(centers[accepted], factors[accepted], color="#009E73", marker="o",
+                       s=6, linewidths=0, label="Passed", zorder=3)
+            ax.scatter(centers[rejected], factors[rejected], color="#D62728", marker="o",
+                       s=6, linewidths=0, label="Rejected", zorder=3)
+        if show_decisions and np.any(~finite):
             display_height = max(threshold, float(factors[finite].max()) if finite.any() else 0) * 1.1
             ax.scatter(centers[~finite], np.full((~finite).sum(), display_height),
                        color="#D62728", marker="^", s=6, label="Rejected: zero RMS (infinite factor)")

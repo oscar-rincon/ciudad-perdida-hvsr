@@ -168,6 +168,17 @@ class NativePlotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "disabled"):
             hp.plot_crest_factor(self.result)
 
+    def test_crest_decision_markers_can_be_hidden(self):
+        result = replace(
+            self.result, params=self.result.params.update(max_crest_factor=6),
+            diagnostics={**self.result.diagnostics, "candidate_starts": np.array([0, 50, 100]),
+                         "candidate_crest_factors": np.array([5., 7., np.inf])})
+        figure = hp.plot_crest_factor(result, show_decisions=False)
+        ax = figure.axes[0]
+        self.assertEqual(len(ax.collections), 0)
+        self.assertEqual(ax.get_legend_handles_labels()[1], ["Limits"])
+        np.testing.assert_array_equal(ax.lines[0].get_ydata(), [6, 6])
+
     def test_component_crest_lines_connect_across_candidate_gaps(self):
         starts = np.array([0, 20000, 40000])
         components = {"Z": np.array([3., 4., 5.]), "N": np.array([4., 5., 7.]),
