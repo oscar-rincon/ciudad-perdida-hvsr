@@ -258,7 +258,7 @@ def plot_crest_factor(result: HVSRResult, *, ax: Axes | None = None,
             ax.scatter(centers[~finite], np.full((~finite).sum(), display_height),
                        color="#D62728", marker="^", s=6, label="Rejected: zero RMS (infinite factor)")
         ax.axhline(threshold, color="0.4", ls="--", lw=0.8,
-                   label="Limits")
+                   label="Limit")
         if component_alpha is not None:
             components = result.diagnostics.get("candidate_component_crest_factors")
             if components is None:
