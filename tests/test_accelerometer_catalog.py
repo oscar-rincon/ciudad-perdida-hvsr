@@ -119,11 +119,6 @@ class OrganizationTests(unittest.TestCase):
         (supplied / "test.seed:Zone.Identifier").write_text("[ZoneTransfer]\nZoneId=3\n")
         with zipfile.ZipFile(supplied / "test.zip", "w") as archive:
             archive.write(path, "nested/test.seed")
-        notebook = root / "main/01_processing/hvsr_analysis.ipynb"
-        notebook.parent.mkdir(parents=True)
-        notebook.write_text(json.dumps({"cells": [{
-            "cell_type": "code", "source": ["params = hv.HVSRParams(window_length_s=200)\n"],
-        }]}))
         build_catalog(root, params=HVSRParams(window_length_s=200))
         (raw / "catalog").rename(supplied / "organized")
         (supplied / "organized/1970-01-01").mkdir()

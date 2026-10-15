@@ -1,8 +1,6 @@
 """Publication dimensions, isolated styling and scientific plot contracts."""
 
-import ast
 from dataclasses import replace
-import json
 import re
 import struct
 import tempfile
@@ -19,6 +17,7 @@ import numpy as np
 
 from utils import hvsr_tools as hv
 from utils import plotting as hp
+from utils.analysis_figure import FIGURE_CONTROLS, make_analysis_figure
 
 
 class PaperStyleTests(unittest.TestCase):
@@ -156,7 +155,7 @@ class NativePlotTests(unittest.TestCase):
                                        matplotlib.colors.to_rgba(color))
         self.assertIn("infinite factor", ax.collections[2].get_label())
         np.testing.assert_array_equal(ax.lines[0].get_ydata(), [6, 6])
-        self.assertEqual(ax.lines[0].get_label(), "Limits")
+        self.assertEqual(ax.lines[0].get_label(), "Limit")
         np.testing.assert_array_equal(result.diagnostics["candidate_crest_factors"], factors)
         figure.canvas.draw()
         renderer = figure.canvas.get_renderer()
@@ -176,7 +175,7 @@ class NativePlotTests(unittest.TestCase):
         figure = hp.plot_crest_factor(result, show_decisions=False)
         ax = figure.axes[0]
         self.assertEqual(len(ax.collections), 0)
-        self.assertEqual(ax.get_legend_handles_labels()[1], ["Limits"])
+        self.assertEqual(ax.get_legend_handles_labels()[1], ["Limit"])
         np.testing.assert_array_equal(ax.lines[0].get_ydata(), [6, 6])
 
     def test_component_crest_lines_connect_across_candidate_gaps(self):
@@ -329,26 +328,15 @@ class NativePlotTests(unittest.TestCase):
                     np.testing.assert_allclose(data.smoothed[key], smoothed, rtol=1e-12)
 
     def _notebook_figure_namespace(self):
-        notebook = Path(__file__).resolve().parents[1] / "main/01_processing/hvsr_analysis.ipynb"
-        cells = json.loads(notebook.read_text())["cells"]
-        source = next("".join(cell["source"]) for cell in cells
-                      if "def make_analysis_figure(" in "".join(cell["source"]))
-        tree = ast.parse(source)
-        definitions = [node for node in tree.body
-                       if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef))
-                       or (isinstance(node, ast.Assign)
-                           and any(isinstance(target, ast.Name) and target.id == "FIGURE_CONTROLS"
-                                   for target in node.targets))]
-        namespace = {"hp": hp, "hv": hv, "plt": plt, "warnings": warnings}
-        exec(compile(ast.Module(body=definitions, type_ignores=[]), str(notebook), "exec"),
-             namespace)
-        return namespace
+        return {"FIGURE_CONTROLS": FIGURE_CONTROLS, "make_analysis_figure": make_analysis_figure}
 
     def test_fourier_visual_hierarchy_preserves_spectra(self):
         namespace = self._notebook_figure_namespace()
         controls = namespace["FIGURE_CONTROLS"].copy()
         controls["show_raw_signals"] = False
         controls["show_unsmoothed_fourier"] = True
+        controls["component_linestyles"] = {"Z": "-", "N": "--", "E": ":"}
+        controls["grid"] = True
         figure = namespace["make_analysis_figure"](
             self.record, self.result, self.component_spectra, controls, hp.PAPER_STYLE,
             fourier_data=self.fourier_data)
@@ -406,8 +394,7 @@ class NativePlotTests(unittest.TestCase):
         for sta_path, crest_path in zip(sta.collections[0].get_paths(),
                                         crest.collections[0].get_paths()):
             np.testing.assert_array_equal(sta_path.vertices, crest_path.vertices)
-        self.assertEqual(sum(len(points.get_offsets()) for points in crest.collections[1:]),
-                         len(result.diagnostics["candidate_starts"]))
+        self.assertEqual(sum(len(points.get_offsets()) for points in crest.collections[1:]), 0)
         starts = result.diagnostics["candidate_starts"]
         nwin = result.diagnostics["n_win"]
         for line, key, attr in zip(crest.lines[1:], ("Z", "N", "E"), ("vt", "ns", "ew")):
@@ -430,16 +417,16 @@ class NativePlotTests(unittest.TestCase):
         self.assertGreaterEqual(crest.get_legend().get_window_extent(renderer).y0,
                                 crest.bbox.y1)
         annotation = crest.texts[0]
-        expected_minutes = result.n_windows * result.diagnostics["n_win"] * self.record.vt.dt_in_seconds / 60
+        expected_minutes = hv.accepted_signal_coverage(result)["unique_duration_min"]
         total_minutes = (self.record.vt.n_samples - 1) * self.record.vt.dt_in_seconds / 60
         self.assertEqual(annotation.get_text(),
                          f"{result.n_windows}/{result.n_grid_windows} windows\n"
-                         f"Included/total time: {expected_minutes:.1f}/{total_minutes:.1f} min")
+                         f"{expected_minutes:.1f}/{total_minutes:.1f} min")
         annotation_bounds = annotation.get_window_extent(renderer)
         self.assertGreaterEqual(annotation_bounds.y0, crest.bbox.y1)
         self.assertLessEqual(annotation_bounds.x1,
                              crest.get_legend().get_window_extent(renderer).x0)
-        self.assertEqual(hvsr.title.get_fontweight(), "bold")
+        self.assertEqual(hvsr.title.get_fontweight(), "normal")
         for ax in figure.axes:
             bounds = ax.get_tightbbox(renderer)
             self.assertGreaterEqual(bounds.x0, 0)
@@ -483,7 +470,7 @@ class NativePlotTests(unittest.TestCase):
             covered[start:start + result.diagnostics["n_win"]] = True
         included_min = covered.sum() * dt / 60
         total_min = (self.record.vt.n_samples - 1) * dt / 60
-        self.assertIn(f"Included/total time: {included_min:.1f}/{total_min:.1f} min",
+        self.assertIn(f"{included_min:.1f}/{total_min:.1f} min",
                       figure.axes[0].texts[0].get_text())
         self.assertLess(covered.sum(), result.n_windows * result.diagnostics["n_win"])
 
@@ -503,9 +490,10 @@ class NativePlotTests(unittest.TestCase):
         sta_lta_ax, fourier_ax, hvsr_ax = figure.axes
         self.assertEqual(sta_lta_ax.get_ylabel(), "STA/LTA")
         self.assertEqual(sta_lta_ax.get_ylim(), (0, 5))
-        self.assertEqual([line.get_label() for line in sta_lta_ax.lines],
+        self.assertEqual([line.get_label() for line in sta_lta_ax.lines[:3]],
                          ["Vertical", "North", "East"])
-        for line, attr in zip(sta_lta_ax.lines, ("vt", "ns", "ew")):
+        self.assertEqual(sta_lta_ax.lines[-2].get_label(), "Limits")
+        for line, attr in zip(sta_lta_ax.lines[:3], ("vt", "ns", "ew")):
             expected = hv.sta_lta_ratio(
                 getattr(self.record, attr).amplitude, self.record.vt.dt_in_seconds,
                 self.result.params.sta_s, self.result.params.lta_s,

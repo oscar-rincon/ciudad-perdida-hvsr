@@ -143,7 +143,7 @@ def notebook_params(path: Path) -> HVSRParams:
 
 def build_catalog(root: Path, *, archive_reader: str | None = None,
                   params: HVSRParams | None = None) -> dict:
-    """Write date manifests only after every interval passes the notebook loader."""
+    """Write date manifests only after every interval passes the configured profile."""
     root = root.resolve()
     data_dir = root / "data/accelerometer"
     destination = data_dir / "catalog"
@@ -267,7 +267,9 @@ def main() -> None:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--archive-reader", default=shutil.which("bsdtar"))
     args = parser.parse_args()
-    params = notebook_params(args.root / "main/01_processing/hvsr_analysis.ipynb")
+    from .site_analysis import BASE_PARAMS
+
+    params = BASE_PARAMS
     print(json.dumps(build_catalog(args.root, archive_reader=args.archive_reader, params=params), indent=2))
 
 

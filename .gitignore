@@ -8,6 +8,14 @@ __pycache__/
 
 # Regenerated analysis products
 outputs/
+main/01_data_organization_hvsr/data/*
+!main/01_data_organization_hvsr/data/.gitkeep
+main/01_data_organization_hvsr/figures/*
+!main/01_data_organization_hvsr/figures/.gitkeep
+main/02_hvsr_processing/data/*
+!main/02_hvsr_processing/data/.gitkeep
+main/02_hvsr_processing/figures/*
+!main/02_hvsr_processing/figures/.gitkeep
 
 # Operating system metadata
 .DS_Store

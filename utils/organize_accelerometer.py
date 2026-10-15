@@ -13,7 +13,7 @@ from pathlib import Path
 import obspy
 
 from .accelerometer_catalog import (
-    WAVEFORM_SUFFIXES, audit_sources, build_catalog, notebook_params, sha256, write_csv,
+    WAVEFORM_SUFFIXES, audit_sources, build_catalog, sha256, write_csv,
 )
 
 
@@ -117,7 +117,9 @@ def organize(root: Path, *, archive_reader: str | None = None) -> dict:
         if destination.exists():
             raise FileExistsError(destination)
         catalog_moves.append((source, destination))
-    params = notebook_params(root / "main/01_processing/hvsr_analysis.ipynb")
+    from .site_analysis import BASE_PARAMS
+
+    params = BASE_PARAMS
     for source, destination, digest in moves:
         destination.parent.mkdir(parents=True, exist_ok=True)
         source.rename(destination)
